@@ -5,7 +5,47 @@
   if (window.__foxFillInit) return;
   window.__foxFillInit = true;
   var D = window.__foxData || {};
-  var count = 0;
+  var count = 0, foundForm = false, sending = false, tries = 0;
+  var TOP = window.top === window;
+
+  // Auto-Modus: Stand an die oberste Seite melden (das Formular kann in einem eingebetteten Rahmen stecken)
+  function tell(state) {
+    if (TOP) { if (window.__foxState !== "success") window.__foxState = state; }
+    else { try { window.top.postMessage("fox-" + state, "*"); } catch (x) {} }
+  }
+  if (TOP) window.addEventListener("message", function (ev) {
+    if (ev.data === "fox-submitted" || ev.data === "fox-success") tell(String(ev.data).slice(4));
+  });
+
+  /** Nur im Auto-Modus: Pflicht-Häkchen setzen und das Formular absenden – genau einmal je Produkt. */
+  function autoSend(g, root) {
+    if (!D.auto || sending || tries >= 5 || !g.area) return;
+    var ta = g.items.filter(function (x) { return x.f === "text"; })[0];
+    if (!ta || !ta.e.value) return;
+    try { if (sessionStorage.getItem("foxSent" + D.aid)) return; } catch (x) {}
+    sending = true; tries++;
+    setTimeout(function () {
+      [].slice.call(root.querySelectorAll("input[type=checkbox]")).forEach(function (c) {
+        if (c.checked || c.disabled) return;
+        var k = keyOf(c);
+        if (/newsletter|werb|marketing|angebot/.test(k)) return;          // keine Werbe-Einwilligung
+        if (c.required || /teilnahme|datenschutz|einverstanden|akzeptier|bestätig|agb|bedingung/.test(k)) c.click();
+      });
+      setTimeout(function () {
+        var btns = [].slice.call(root.querySelectorAll("button,input[type=submit],[role=button]")).filter(visible);
+        var b = btns.filter(function (x) { return /bewerb|teilnehm|absenden|abschicken|senden|mitmachen/.test(low(x.textContent || x.value)); })[0] ||
+          (root !== document ? btns.filter(function (x) { return low(x.type) === "submit"; })[0] : null);
+        if (!b || b.disabled) { sending = false; return; }
+        try { sessionStorage.setItem("foxSent" + D.aid, "1"); } catch (x) {}
+        b.click();
+        tell("submitted");
+        var n = 0, w = setInterval(function () {
+          if (++n > 20) return clearInterval(w);
+          if (/vielen dank|erfolgreich|eingegangen|bewerbung erhalten|danke für/.test(low(document.body.innerText))) { tell("success"); clearInterval(w); }
+        }, 1000);
+      }, 700);
+    }, 1500);
+  }
 
   function low(s) { return String(s || "").toLowerCase().replace(/\s+/g, " "); }
 
@@ -124,6 +164,8 @@
         var v = x.f === "text" ? D.text : valueFor(x.f, x.e, hasNr);
         if (v) setVal(x.e, String(v));
       });
+      foundForm = true;
+      autoSend(g, roots[groups.indexOf(g)]);
     });
     if (!groups.some(function (g) { return g.area || g.items.length >= 2; })) return show();
 
@@ -169,7 +211,7 @@
       b.onclick = function () { b.remove(); };
       document.body.appendChild(b);
     }
-    b.textContent = "🦊 " + count + " Felder ausgefüllt – bitte prüfen, Häkchen setzen und selbst absenden";
+    b.textContent = D.auto ? "🤖 " + count + " Felder ausgefüllt – wird automatisch abgeschickt" : "🦊 " + count + " Felder ausgefüllt – bitte prüfen, Häkchen setzen und selbst absenden";
   }
 
   function relay() {
@@ -185,5 +227,17 @@
   var timer = setInterval(function () {
     if (++runs > 60) return clearInterval(timer);
     try { fill(); } catch (x) {}
+    // Auto-Modus: nach unten blättern, damit das Formular geladen wird; notfalls einmal den Teilnahme-Knopf antippen
+    if (D.auto && TOP && !foundForm && !window.__foxState) {
+      try {
+        window.scrollBy(0, 900);
+        if (runs === 12) {
+          var cta = [].slice.call(document.querySelectorAll("a,button")).filter(function (e) {
+            return visible(e) && /^(zur teilnahme|jetzt bewerben|jetzt teilnehmen|testpilot werden|hier bewerben|zum teilnahmeformular)/.test(low(e.textContent).trim());
+          })[0];
+          if (cta) cta.click();
+        }
+      } catch (x) {}
+    }
   }, 1500);
 })();

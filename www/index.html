@@ -78,6 +78,9 @@ h2 span{text-transform:none;letter-spacing:0}
 .people button{flex:none;border:0;border-radius:999px;padding:9px 16px;font-size:15px;background:var(--card);color:var(--text)}
 .people button.on{background:var(--accent);color:#fff;font-weight:600}
 .who{font-size:12px;color:var(--ok);margin-top:6px}
+.autobar{position:fixed;left:12px;right:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));z-index:10;max-width:536px;margin:0 auto}
+.autobar button{width:100%;border:0;border-radius:16px;padding:15px;font-size:16px;font-weight:700;background:var(--fox);color:#fff;box-shadow:0 6px 20px rgba(0,0,0,.3)}
+.prod .row{flex-wrap:wrap}
 </style>
 <script src="version.js"></script>
 </head>
@@ -108,9 +111,11 @@ h2 span{text-transform:none;letter-spacing:0}
   <div id="list"></div>
 
   <div class="tip">
-    <b>Mehrere Personen im Haushalt:</b> Mit ＋ legst du für jede Person ein eigenes Profil an (eigener Name, eigene Daten, eigenes Konto). Beim Wechsel wird der App-Browser abgemeldet und mit dem Konto dieser Person neu angemeldet.<br><br><b>So bewirbst du dich:</b> Einmal unter ⚙️ deine Daten, deinen Bewerbungstext und deine Konten (E-Mail + Passwort für myMediaMarkt und mySaturn) speichern. Dann bei einem Produkt auf „Bewerben“ tippen und zum Teilnahmeformular gehen – Fox Testpilot füllt es aus. Du prüfst kurz, setzt die Häkchen und schickst selbst ab. Danach hier „Beworben“ abhaken.
+    <b>Mehrere Personen im Haushalt:</b> Mit ＋ legst du für jede Person ein eigenes Profil an (eigener Name, eigene Daten, eigenes Konto). Beim Wechsel wird der App-Browser abgemeldet und mit dem Konto dieser Person neu angemeldet.<br><br><b>So bewirbst du dich:</b> Einmal unter ⚙️ deine Daten, deinen Bewerbungstext und deine Konten (E-Mail + Passwort für myMediaMarkt und mySaturn) speichern. Dann bei einem Produkt auf „Bewerben“ tippen und zum Teilnahmeformular gehen – Fox Testpilot füllt es aus. Du prüfst kurz, setzt die Häkchen und schickst selbst ab. Danach hier „Beworben“ abhaken.<br><br><b>Automatisch:</b> Bei den gewünschten Produkten „🤖 Auto“ anhaken und unten auf den orangen Knopf tippen. Die App geht die Produkte nacheinander durch, füllt aus, akzeptiert die Teilnahmebedingungen und schickt ab. Vorher einmal unter ⚙️ → Konten „Anmelden“ tippen.
   </div>
 </div>
+
+<div class="autobar" id="autobar" hidden><button id="autogo"></button></div>
 
 <div class="sheet" id="setsheet" hidden><div>
   <div class="shead"><h3>⚙️ Einstellungen</h3><button data-close aria-label="Schließen">✕</button></div>
@@ -164,6 +169,7 @@ var NATIVE = !!(CAP && CAP.nativePromise);
 var state = { last: null, applied: {}, persons: [], active: "p1", appliedAll: {} };
 var checking = false;
 var heroUrl = PAGE;
+var sel = {};
 
 function call(method, options, timeoutMs) {
   if (!NATIVE) return Promise.reject(new Error("Nur in der Android-App verfügbar"));
@@ -255,7 +261,8 @@ function renderList() {
       var img = p.img ? ' style="background-image:url(&quot;' + esc(p.img) + '&quot;)"' : "";
       return '<div class="prod' + (ok ? " done" : "") + '"><div class="im"' + img + ">" + (p.img ? "" : "📦") + '</div><div class="t"><b>' + esc(p.name) +
         (p.isNew ? '<span class="badge">NEU</span>' : "") + '</b><div class="row"><button class="go" data-s="' + si + '" data-i="' + i + '">Bewerben ↗</button>' +
-        '<label><input type="checkbox" data-id="' + esc(p.aid) + '"' + (ok ? " checked" : "") + "> Beworben</label></div>" + whoApplied(p.aid) + "</div></div>";
+        '<label><input type="checkbox" data-id="' + esc(p.aid) + '"' + (ok ? " checked" : "") + "> Beworben</label>" +
+        (ok ? "" : '<label><input type="checkbox" data-sel="' + esc(p.aid) + '"' + (sel[p.aid] ? " checked" : "") + "> 🤖 Auto</label>") + "</div>" + whoApplied(p.aid) + "</div></div>";
     }).join("");
   }).join("");
 }
@@ -288,7 +295,23 @@ $("people").onclick = function (ev) {
     call("selectPerson", { id: b.dataset.p }, 10000).then(switched).catch(function (e) { alertErr(e.message); });
   }
 };
-function render() { renderHero(); renderList(); }
+function selected() {
+  var out = [];
+  shops().forEach(function (l) { (l.products || []).forEach(function (p) { if (sel[p.aid] && !state.applied[p.aid]) out.push({ url: p.url, name: p.name, aid: p.aid }); }); });
+  return out;
+}
+function renderAuto() {
+  var n = selected().length;
+  $("autobar").hidden = !n;
+  $("autogo").textContent = "🤖 " + n + (n === 1 ? " Produkt" : " Produkte") + " automatisch bewerben" + (state.persons.length > 1 ? " (" + activeLabel() + ")" : "");
+}
+$("autogo").onclick = function () {
+  var items = selected();
+  if (!items.length) return;
+  if (!confirm("Für " + items.length + (items.length === 1 ? " Produkt" : " Produkte") + " automatisch bewerben" + (state.persons.length > 1 ? " als " + activeLabel() : "") + "?\n\nDie App füllt das Formular mit den gespeicherten Daten aus, akzeptiert die Teilnahmebedingungen und den Datenschutzhinweis in deinem Namen und schickt die Bewerbung ab.")) return;
+  call("openQueue", { items: items }).then(function () { sel = {}; }).catch(function (e) { alertErr(e.message); });
+};
+function render() { renderHero(); renderList(); renderAuto(); }
 
 function load() {
   return call("getState", {}, 10000).then(function (s) {
@@ -384,9 +407,11 @@ $("list").onclick = function (ev) {
   if (pg) openLink(shops()[+pg.dataset.s].url);
 };
 $("list").onchange = function (ev) {
-  var cb = ev.target; if (!cb.dataset.id) return;
+  var cb = ev.target;
+  if (cb.dataset.sel) { sel[cb.dataset.sel] = cb.checked; renderAuto(); return; }
+  if (!cb.dataset.id) return;
   call("setApplied", { id: cb.dataset.id, on: cb.checked }, 10000).then(function (a) {
-    state.applied = a || {}; state.appliedAll[state.active] = state.applied; renderList();
+    state.applied = a || {}; state.appliedAll[state.active] = state.applied; renderList(); renderAuto();
     var ps = [].concat.apply([], shops().map(function (l) { return l.products || []; }));
     if (cb.checked && ps.length && ps.every(function (p) { return state.applied[p.aid]; })) confetti();
   }).catch(function (e) { alertErr(e.message); });

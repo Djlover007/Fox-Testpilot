@@ -37,9 +37,75 @@ public class ApplyActivity extends Activity {
     private WebView web;
     private boolean allFrames = false;
     private String script = "";
+    // Auto-Modus: ausgewählte Produkte nacheinander ausfüllen und absenden
+    private org.json.JSONArray queue;
+    private int qi = 0, sentCount = 0;
+    private long stepStart = 0, submittedAt = 0;
+    private boolean warned = false, stepDone = false;
+    private androidx.webkit.ScriptHandler handler;
+    private TextView titleView;
+    private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
+
+    private void loadStep() {
+        if (isFinishing()) return;
+        if (qi >= queue.length()) {
+            Toast.makeText(this, "🤖 Fertig: " + sentCount + " von " + queue.length() + " Bewerbungen abgeschickt", Toast.LENGTH_LONG).show();
+            finish();
+            return;
+        }
+        JSONObject it = queue.optJSONObject(qi);
+        script = buildScript(this, it.optString("name"), it.optString("url"), it.optString("aid"));
+        try {
+            if (handler != null) handler.remove();
+            handler = null;
+            if (!script.isEmpty() && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                handler = WebViewCompat.addDocumentStartJavaScript(web, script, Collections.singleton("*"));
+                allFrames = true;
+            }
+        } catch (Exception ignored) {
+        }
+        stepStart = System.currentTimeMillis();
+        submittedAt = 0;
+        warned = false;
+        stepDone = false;
+        titleView.setText("🤖 " + (qi + 1) + "/" + queue.length() + " " + it.optString("name"));
+        web.loadUrl(it.optString("url"));
+    }
+
+    private void stepFinished() {
+        if (stepDone) return;
+        stepDone = true;
+        PilotChecker.setApplied(this, queue.optJSONObject(qi).optString("aid"), true);
+        sentCount++;
+        Toast.makeText(this, "✅ Abgeschickt: " + queue.optJSONObject(qi).optString("name"), Toast.LENGTH_SHORT).show();
+        qi++;
+        ui.postDelayed(this::loadStep, 2500);
+    }
+
+    private final Runnable watch = new Runnable() {
+        @Override
+        public void run() {
+            if (isFinishing() || queue == null) return;
+            if (!stepDone) {
+                web.evaluateJavascript("window.__foxState||''", v -> {
+                    if (stepDone || v == null) return;
+                    long now = System.currentTimeMillis();
+                    if (v.contains("success")) stepFinished();
+                    else if (v.contains("submitted")) {
+                        if (submittedAt == 0) submittedAt = now;
+                        else if (now - submittedAt > 10000) stepFinished();
+                    } else if (!warned && now - stepStart > 75000) {
+                        warned = true;
+                        Toast.makeText(ApplyActivity.this, "Hier ging es nicht automatisch – bitte selbst ausfüllen/absenden oder „Weiter ▶“ tippen", Toast.LENGTH_LONG).show();
+                    }
+                });
+            }
+            ui.postDelayed(this, 2000);
+        }
+    };
 
     /** Baut das Ausfüll-Skript: gespeicherte Daten + www/autofill.js. */
-    static String buildScript(android.content.Context c, String product, String url) {
+    static String buildScript(android.content.Context c, String product, String url, String autoAid) {
         try {
             JSONObject p = new JSONObject(PilotChecker.prefs(c).getString(PilotChecker.profileKey(c), "{}"));
             String name = product == null || product.trim().isEmpty() ? "das Testprodukt" : product.trim();
@@ -48,6 +114,10 @@ public class ApplyActivity extends Activity {
             String shop = url == null ? null : Accounts.shopForUrl(url);
             String mail = shop == null ? "" : Accounts.email(c, shop);
             if (!mail.isEmpty()) p.put("email", mail);
+            if (autoAid != null) {
+                p.put("auto", true);
+                p.put("aid", autoAid);
+            }
             InputStream in = c.getAssets().open("public/autofill.js");
             ByteArrayOutputStream out = new ByteArrayOutputStream();
             byte[] buf = new byte[8192];
@@ -74,7 +144,13 @@ public class ApplyActivity extends Activity {
         Button close = new Button(this);
         close.setText("✕");
         close.setOnClickListener(v -> finish());
+        try {
+            String q = getIntent().getStringExtra("queue");
+            if (q != null) queue = new org.json.JSONArray(q);
+        } catch (Exception ignored) {
+        }
         TextView title = new TextView(this);
+        titleView = title;
         title.setText("🦊 Fox Testpilot");
         title.setTextColor(Color.WHITE);
         title.setTextSize(15);
@@ -82,6 +158,14 @@ public class ApplyActivity extends Activity {
         Button fill = new Button(this);
         fill.setText("🦊 Ausfüllen");
         fill.setOnClickListener(v -> runFill(true));
+        if (queue != null) {
+            fill.setText("Weiter ▶");
+            fill.setOnClickListener(v -> {
+                if (stepDone) return;
+                qi++;
+                loadStep();
+            });
+        }
         Button ext = new Button(this);
         ext.setText("↗");
         ext.setOnClickListener(v -> {
@@ -104,10 +188,10 @@ public class ApplyActivity extends Activity {
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
 
-        script = buildScript(this, getIntent().getStringExtra("name"), getIntent().getStringExtra("url"));
+        if (queue == null) script = buildScript(this, getIntent().getStringExtra("name"), getIntent().getStringExtra("url"), null);
         // Skript in ALLE Rahmen der Seite laden – das Formular ist oft von einem anderen Anbieter eingebettet
         try {
-            if (!script.isEmpty() && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            if (queue == null && !script.isEmpty() && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                 WebViewCompat.addDocumentStartJavaScript(web, script, Collections.singleton("*"));
                 allFrames = true;
             }
@@ -147,8 +231,19 @@ public class ApplyActivity extends Activity {
         root.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(root);
 
+        if (queue != null) {
+            loadStep();
+            ui.postDelayed(watch, 3000);
+            return;
+        }
         String url = getIntent().getStringExtra("url");
         web.loadUrl(url != null ? url : PilotChecker.PAGE);
+    }
+
+    @Override
+    protected void onDestroy() {
+        ui.removeCallbacksAndMessages(null);
+        super.onDestroy();
     }
 
     private void runFill(boolean toast) {

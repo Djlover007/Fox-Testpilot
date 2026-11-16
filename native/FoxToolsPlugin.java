@@ -198,6 +198,21 @@ public class FoxToolsPlugin extends Plugin {
         call.resolve();
     }
 
+    /** Auto-Modus: ausgewählte Produkte nacheinander im App-Browser ausfüllen und absenden. */
+    @PluginMethod
+    public void openQueue(PluginCall call) {
+        JSArray items = call.getArray("items");
+        if (items == null || items.length() == 0) {
+            call.reject("Keine Produkte ausgewählt");
+            return;
+        }
+        Intent i = new Intent(getContext(), ApplyActivity.class);
+        i.putExtra("queue", items.toString());
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        getContext().startActivity(i);
+        call.resolve();
+    }
+
     @PluginMethod
     public void getProfile(PluginCall call) {
         try {
