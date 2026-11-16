@@ -1,0 +1,16 @@
+
+android {
+    signingConfigs {
+        fox {
+            storeFile file("../fox-testpilot.keystore")
+            storePassword "foxpilot123"
+            keyAlias "fox"
+            keyPassword "foxpilot123"
+        }
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.fox
+        }
+    }
+}
