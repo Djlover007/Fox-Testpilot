@@ -228,7 +228,26 @@ public class PilotChecker {
         } else {
             status = text.toLowerCase(Locale.GERMANY).contains("demnächst") ? "soon" : "none";
         }
+        // Countdown auf der Seite ("Tage Stunden Minuten") -> genaue Uhrzeit
+        long startAt = 0, endAt = 0;
+        long cd = countdownMs(text);
+        if (cd >= 0) {
+            long target = snap(System.currentTimeMillis() + cd);
+            int targetDay = ymdOf(target);
+            if (status.equals("open") && targetDay > start) {
+                endAt = target;                       // läuft schon: Countdown zählt bis zum Ende
+            } else {
+                startAt = target;                     // zählt bis zum Start
+                status = target > System.currentTimeMillis() ? "soon" : "open";
+                if (start == 0) {
+                    start = targetDay;
+                    end = targetDay;
+                    st.put("endUnknown", true);
+                }
+            }
+        }
         String phaseKey = start > 0 ? start + "-" + end : "";
+        if (startAt > System.currentTimeMillis()) scheduleStartCheck(c, key, startAt);
 
         // Produkte: bevorzugt die, die eindeutig im Testpiloten-Bereich stehen
         JSONArray all = w.items;
@@ -271,6 +290,8 @@ public class PilotChecker {
         st.put("end", end > 0 ? fmt(end) : "");
         st.put("startYmd", start);
         st.put("endYmd", end);
+        st.put("startAt", startAt);
+        st.put("endAt", endAt);
         st.put("headline", headline(text));
         st.put("products", products);
 
@@ -290,17 +311,19 @@ public class PilotChecker {
         if (notify && !phaseKey.isEmpty()) {
             if (status.equals("open") && notified.add("open:" + phaseKey)) {
                 showNotification(c, nid + 1, "🚀 " + shop + " Testpiloten: Bewerbung ist offen!",
-                        "Bewerben bis " + fmtShort(end) + (products.length() > 0 ? " – " + products.length() + " Testprodukte: " + names : ""),
+                        (st.optBoolean("endUnknown") ? "Jetzt bewerben" : "Bewerben bis " + fmtShort(end)) + (products.length() > 0 ? " – " + products.length() + " Testprodukte: " + names : ""),
                         alarmOn(c), page);
-                history(c, "🚀 " + shop + ": Bewerbungsphase offen bis " + fmt(end));
+                history(c, "🚀 " + shop + ": Bewerbungsphase offen" + (st.optBoolean("endUnknown") ? "" : " bis " + fmt(end)));
                 told = true;
             } else if (status.equals("soon") && notified.add("soon:" + phaseKey)) {
-                showNotification(c, nid + 2, "📅 " + shop + ": neue Testpiloten-Runde angekündigt",
-                        "Bewerbung vom " + fmtShort(start) + " bis " + fmtShort(end), false, page);
-                history(c, "📅 " + shop + ": neue Runde angekündigt: " + fmt(start) + " – " + fmt(end));
+                String when = startAt > 0
+                        ? "Start am " + new SimpleDateFormat("EEE dd.MM. 'um' HH:mm 'Uhr'", Locale.GERMANY).format(new Date(startAt))
+                        : "Bewerbung vom " + fmtShort(start) + " bis " + fmtShort(end);
+                showNotification(c, nid + 2, "📅 " + shop + ": neue Testpiloten-Runde angekündigt", when, false, page);
+                history(c, "📅 " + shop + ": neue Runde angekündigt – " + when);
                 told = true;
             }
-            if (status.equals("open") && now == end && notified.add("last:" + phaseKey)) {
+            if (status.equals("open") && now == end && !st.optBoolean("endUnknown") && notified.add("last:" + phaseKey)) {
                 showNotification(c, nid + 3, "⏰ " + shop + ": heute letzter Tag für die Testpiloten",
                         products.length() > 0 ? "Du hast dich für " + appliedCount + " von " + products.length() + " Produkten beworben." : "Heute endet die Bewerbungsphase.",
                         false, page);
@@ -318,6 +341,56 @@ public class PilotChecker {
             history(c, shop + ": " + statusText(status) + (start > 0 ? " (" + fmt(start) + " – " + fmt(end) + ")" : ""));
         }
         return st;
+    }
+
+    static final String N = "(\\d{1,3})", SEP = "[\\s:.|]*";
+    static final String T = "(?:Tage?n?|Tg\\.?)", H = "(?:Stunden?|Std\\.?)", M = "(?:Minuten?|Min\\.?)";
+    static final Pattern[] COUNTDOWNS = {
+        // 12 Tage 05 Stunden 33 Minuten
+        Pattern.compile(N + SEP + T + SEP + N + SEP + H + SEP + N + SEP + M, Pattern.CASE_INSENSITIVE),
+        // Tage 12 Stunden 05 Minuten 33
+        Pattern.compile("\\b" + T + SEP + N + SEP + H + SEP + N + SEP + M + SEP + N, Pattern.CASE_INSENSITIVE),
+        // 12 05 33 (10)  Tage Stunden Minuten
+        Pattern.compile(N + SEP + N + SEP + N + "(?:" + SEP + "\\d{1,2})?" + SEP + T + SEP + H + SEP + M, Pattern.CASE_INSENSITIVE),
+        // Tage Stunden Minuten (Sekunden)  12 05 33
+        Pattern.compile("\\b" + T + SEP + H + SEP + M + "(?:" + SEP + "(?:Sekunden?|Sek\\.?))?" + SEP + N + SEP + N + SEP + N, Pattern.CASE_INSENSITIVE),
+    };
+
+    /** Liest den Countdown der Seite. Ergebnis: verbleibende Millisekunden oder -1. */
+    static long countdownMs(String text) {
+        for (Pattern p : COUNTDOWNS) {
+            Matcher m = p.matcher(text);
+            if (!m.find()) continue;
+            long d = Long.parseLong(m.group(1)), h = Long.parseLong(m.group(2)), min = Long.parseLong(m.group(3));
+            if (h > 23 || min > 59 || d > 120) continue;
+            return ((d * 24 + h) * 60 + min) * 60000L;
+        }
+        return -1;
+    }
+
+    /** Auf die Minute runden; liegt das Ziel höchstens 2 Min. neben einer vollen Viertelstunde, diese nehmen. */
+    static long snap(long t) {
+        long q = 15 * 60000L, near = Math.round(t / (double) q) * q;
+        return Math.abs(near - t) <= 2 * 60000L ? near : Math.round(t / 60000.0) * 60000L;
+    }
+
+    static int ymdOf(long t) {
+        Calendar cal = Calendar.getInstance();
+        cal.setTimeInMillis(t);
+        return ymd(cal.get(Calendar.DAY_OF_MONTH), cal.get(Calendar.MONTH) + 1, cal.get(Calendar.YEAR));
+    }
+
+    /** Plant eine Extra-Prüfung kurz nach dem Start, damit die Meldung pünktlich kommt. */
+    static void scheduleStartCheck(Context c, String key, long startAt) {
+        try {
+            long delay = Math.max(0, startAt - System.currentTimeMillis()) + 60000L;
+            androidx.work.OneTimeWorkRequest req = new androidx.work.OneTimeWorkRequest.Builder(CheckWorker.class)
+                    .setInitialDelay(delay, java.util.concurrent.TimeUnit.MILLISECONDS)
+                    .setConstraints(new androidx.work.Constraints.Builder().setRequiredNetworkType(androidx.work.NetworkType.CONNECTED).build())
+                    .build();
+            androidx.work.WorkManager.getInstance(c).enqueueUniqueWork("fox-start-" + key, androidx.work.ExistingWorkPolicy.REPLACE, req);
+        } catch (Exception ignored) {
+        }
     }
 
     static String statusText(String s) {

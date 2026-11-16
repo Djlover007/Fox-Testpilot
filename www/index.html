@@ -179,7 +179,18 @@ function ago(t) {
 }
 
 function shops() { return (state.last && state.last.shops) || []; }
+function leftText(ms) {
+  var m = Math.max(0, Math.round((ms - Date.now()) / 60000)), d = Math.floor(m / 1440), h = Math.floor(m % 1440 / 60);
+  return (d ? d + (d === 1 ? " Tag " : " Tage ") : "") + (d || h ? h + " Std. " : "") + (m % 60) + " Min.";
+}
+function whenText(ms) {
+  var d = new Date(ms);
+  return d.toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" }) + " um " + d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" }) + " Uhr";
+}
 function shopLine(l, now) {
+  if (l.status === "soon" && l.startAt) return "📅 Start " + whenText(l.startAt);
+  if (l.status === "open" && l.endAt) return "🚀 Bewerbung offen bis " + whenText(l.endAt);
+  if (l.status === "open" && l.endUnknown) return "🚀 Bewerbung offen";
   if (l.status === "open") { var left = daysBetween(now, l.endYmd); return "🚀 Bewerbung offen bis " + shortDate(l.end) + (left <= 0 ? " – heute letzter Tag!" : ""); }
   if (l.status === "soon") return l.startYmd ? "📅 Bewerbung " + shortDate(l.start) + " – " + l.end : "📅 Nächste Runde demnächst";
   if (l.status === "over") return "Runde beendet am " + l.end;
@@ -198,15 +209,18 @@ function renderHero() {
     var l = open[0]; heroUrl = l.url;
     h.className = "hero open";
     $("herotitle").textContent = "Bewerbung ist offen! 🚀";
-    $("herosub").textContent = names(open) + " · " + shortDate(l.start) + " – " + l.end;
+    $("herosub").textContent = names(open) + (l.endUnknown ? "" : " · " + shortDate(l.start) + " – " + l.end);
     var left = daysBetween(now, l.endYmd);
-    cd.textContent = left <= 0 ? "⏰ Heute letzter Tag!" : "Noch " + (left + 1) + " Tage (bis " + shortDate(l.end) + ")";
-    cd.hidden = false;
+    if (l.endAt) { cd.textContent = "⏳ Endet in " + leftText(l.endAt); cd.hidden = false; }
+    else if (!l.endUnknown) { cd.textContent = left <= 0 ? "⏰ Heute letzter Tag!" : "Noch " + (left + 1) + " Tage (bis " + shortDate(l.end) + ")"; cd.hidden = false; }
   } else if (soon.length) {
     var n = soon[0]; heroUrl = n.url;
     h.className = "hero soon";
     $("herotitle").textContent = "Nächste Runde kommt 📅";
-    if (n.startYmd) {
+    if (n.startAt) {
+      $("herosub").textContent = n.name + ": Start " + whenText(n.startAt);
+      cd.textContent = "⏳ Noch " + leftText(n.startAt); cd.hidden = false;
+    } else if (n.startYmd) {
       $("herosub").textContent = n.name + ": Bewerbung vom " + shortDate(n.start) + " bis " + n.end;
       var d = daysBetween(now, n.startYmd);
       cd.textContent = d <= 1 ? "Startet morgen" : "Startet in " + d + " Tagen"; cd.hidden = false;
