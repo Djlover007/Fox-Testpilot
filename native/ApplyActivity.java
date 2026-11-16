@@ -47,6 +47,29 @@ public class ApplyActivity extends Activity {
     private boolean loginViaStart = false;
     private int total = 0, loginOk = 0;
     private TextView titleView;
+    private android.widget.ProgressBar progress;
+
+    private int dp(int v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+
+    /** Runder Knopf im Fuchs-Stil für die obere Leiste. */
+    private void pill(Button b, boolean accent) {
+        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+        bg.setCornerRadius(dp(20));
+        bg.setColor(accent ? Color.parseColor("#f28c28") : Color.parseColor("#38FFFFFF"));
+        b.setBackground(bg);
+        b.setTextColor(Color.WHITE);
+        b.setAllCaps(false);
+        b.setTextSize(14);
+        b.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        b.setMinWidth(0);
+        b.setMinimumWidth(0);
+        b.setMinHeight(0);
+        b.setMinimumHeight(0);
+        b.setPadding(dp(accent ? 14 : 0), 0, dp(accent ? 14 : 0), 0);
+        b.setStateListAnimator(null);
+    }
     private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
 
     private void loadStep() {
@@ -88,6 +111,7 @@ public class ApplyActivity extends Activity {
         warned = false;
         stepDone = false;
         loginOk = 0;
+        if (progress != null) progress.setProgress(qi);
         allFrames = handler != null;
         String who = it.optString("label");
         titleView.setText((login ? "🔑 " : "🤖 ") + (qi + 1) + "/" + queue.length() + " " + (who.isEmpty() ? "" : who + ": ") + it.optString("name"));
@@ -214,9 +238,10 @@ public class ApplyActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
 
         LinearLayout bar = new LinearLayout(this);
-        bar.setBackgroundColor(Color.parseColor("#2b6fde"));
+        bar.setBackground(new android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT,
+                new int[] { Color.parseColor("#2b6fde"), Color.parseColor("#7b2fd1") }));
         bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding(16, 8, 16, 8);
+        bar.setPadding(dp(10), dp(8), dp(10), dp(8));
         Button close = new Button(this);
         close.setText("✕");
         close.setOnClickListener(v -> finish());
@@ -233,7 +258,10 @@ public class ApplyActivity extends Activity {
         title.setText("🦊 Fox Testpilot");
         title.setTextColor(Color.WHITE);
         title.setTextSize(15);
-        title.setPadding(20, 0, 0, 0);
+        title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        title.setSingleLine(true);
+        title.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        title.setPadding(dp(10), 0, dp(8), 0);
         Button fill = new Button(this);
         fill.setText("🦊 Ausfüllen");
         fill.setOnClickListener(v -> runFill(true));
@@ -268,10 +296,21 @@ public class ApplyActivity extends Activity {
             } catch (Exception ignored) {
             }
         });
-        bar.addView(close, new LinearLayout.LayoutParams(140, ViewGroup.LayoutParams.WRAP_CONTENT));
+        pill(close, false);
+        pill(fill, true);
+        pill(ext, false);
+        bar.addView(close, new LinearLayout.LayoutParams(dp(40), dp(40)));
         bar.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        bar.addView(fill);
-        bar.addView(ext, new LinearLayout.LayoutParams(140, ViewGroup.LayoutParams.WRAP_CONTENT));
+        bar.addView(fill, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)));
+        LinearLayout.LayoutParams extLp = new LinearLayout.LayoutParams(dp(40), dp(40));
+        extLp.setMarginStart(dp(6));
+        bar.addView(ext, extLp);
+
+        // Fortschritt: im Auto-Modus die Schritte, sonst das Laden der Seite
+        progress = new android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progress.setProgressTintList(android.content.res.ColorStateList.valueOf(Color.parseColor("#f28c28")));
+        progress.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(Color.parseColor("#33000000")));
+        if (queue != null) progress.setMax(Math.max(1, queue.length()));
 
         web = new WebView(this);
         WebSettings s = web.getSettings();
@@ -303,9 +342,17 @@ public class ApplyActivity extends Activity {
                 }
             }
         });
-        web.setWebChromeClient(new WebChromeClient());
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public void onProgressChanged(WebView view, int p) {
+                if (queue != null) return;
+                progress.setProgress(p);
+                progress.setVisibility(p >= 100 ? android.view.View.INVISIBLE : android.view.View.VISIBLE);
+            }
+        });
 
         root.addView(bar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(progress, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4)));
         root.addView(web, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         setContentView(root);
 

@@ -82,6 +82,8 @@ public class FoxToolsPlugin extends Plugin {
             r.put("interval", PilotChecker.intervalMinutes(getContext()));
             r.put("alarm", PilotChecker.alarmOn(getContext()));
             r.put("quiet", PilotChecker.prefs(getContext()).getBoolean("quiet", false));
+            r.put("theme", PilotChecker.prefs(getContext()).getString("theme", "auto"));
+            r.put("introDone", PilotChecker.prefs(getContext()).getBoolean("introDone", false));
             r.put("quietFrom", PilotChecker.prefs(getContext()).getInt("quietFrom", 22));
             r.put("quietTo", PilotChecker.prefs(getContext()).getInt("quietTo", 7));
             r.put("info", JSObject.fromJSONObject(PilotChecker.getInfo(getContext(), PilotChecker.activePerson(getContext()))));
@@ -119,6 +121,8 @@ public class FoxToolsPlugin extends Plugin {
         if (call.hasOption("background")) e.putBoolean("background", Boolean.TRUE.equals(call.getBoolean("background")));
         if (call.hasOption("interval")) e.putInt("interval", Math.max(15, call.getInt("interval", 30)));
         if (call.hasOption("alarm")) e.putBoolean("alarm", Boolean.TRUE.equals(call.getBoolean("alarm")));
+        if (call.hasOption("theme")) e.putString("theme", call.getString("theme", "auto"));
+        if (call.hasOption("introDone")) e.putBoolean("introDone", Boolean.TRUE.equals(call.getBoolean("introDone")));
         if (call.hasOption("quiet")) e.putBoolean("quiet", Boolean.TRUE.equals(call.getBoolean("quiet")));
         if (call.hasOption("quietFrom")) e.putInt("quietFrom", call.getInt("quietFrom", 22));
         if (call.hasOption("quietTo")) e.putInt("quietTo", call.getInt("quietTo", 7));
