@@ -28,7 +28,7 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Prüft die MediaMarkt-Testpiloten-Seite. Wird von der App und vom Hintergrund-Worker benutzt. */
+/** Prüft die Testpiloten-Seiten von MediaMarkt und Saturn. Wird von der App und vom Hintergrund-Worker benutzt. */
 public class PilotChecker {
 
     public static final String PAGE = "https://www.mediamarkt.de/de/campaign/testpiloten";
@@ -163,26 +163,51 @@ public class PilotChecker {
         }
     }
 
+    /** Die überwachten Shops: Schlüssel, Name, Testpiloten-Seite. */
+    static final String[][] SHOPS = {
+        { "mm", "MediaMarkt", PAGE },
+        { "saturn", "Saturn", "https://www.saturn.de/de/campaign/testpiloten" },
+    };
+
     public static JSONObject run(Context c, boolean manual) throws Exception {
         return run(c, true, manual);
     }
 
     public static synchronized JSONObject run(Context c, boolean notify, boolean manual) throws Exception {
+        JSONObject prev = getLast(c);
+        JSONArray prevShops = prev == null ? null : prev.optJSONArray("shops");
         JSONObject st = new JSONObject();
         st.put("time", System.currentTimeMillis());
-        JSONObject prev = getLast(c);
+        JSONArray shops = new JSONArray();
+        for (int i = 0; i < SHOPS.length; i++) {
+            JSONObject before = null;
+            for (int j = 0; prevShops != null && j < prevShops.length(); j++) {
+                if (SHOPS[i][0].equals(prevShops.getJSONObject(j).optString("key"))) before = prevShops.getJSONObject(j);
+            }
+            shops.put(checkShop(c, i, before, notify, manual));
+        }
+        st.put("shops", shops);
+        prefs(c).edit().putString("last", st.toString()).apply();
+        return st;
+    }
 
-        WebLoader.Result w = WebLoader.load(c, PAGE, 40000);
-        if (w.error == null && looksBlocked(w.text)) w.error = "MediaMarkt hat den Abruf blockiert – später nochmal";
+    static JSONObject checkShop(Context c, int idx, JSONObject prev, boolean notify, boolean manual) throws Exception {
+        String key = SHOPS[idx][0], shop = SHOPS[idx][1], page = SHOPS[idx][2];
+        String sfx = key.equals("mm") ? "" : "_" + key;   // MediaMarkt behält die alten Speicher-Namen
+        String idPrefix = key.equals("mm") ? "" : key.substring(0, 1);
+        int nid = 100 * (idx + 1);
+        JSONObject st = new JSONObject();
+        st.put("key", key);
+        st.put("name", shop);
+        st.put("url", page);
+
+        WebLoader.Result w = WebLoader.load(c, page, 40000);
+        if (w.error == null && looksBlocked(w.text)) w.error = shop + " hat den Abruf blockiert – später nochmal";
         if (w.error != null) {
             // Letzten guten Stand behalten, nur den Fehler dazuschreiben
-            if (prev != null) {
-                st = new JSONObject(prev.toString());
-                st.put("time", System.currentTimeMillis());
-            }
+            if (prev != null) st = new JSONObject(prev.toString());
             st.put("error", w.error);
-            prefs(c).edit().putString("last", st.toString()).apply();
-            if (manual) history(c, "⚠️ " + w.error);
+            if (manual) history(c, "⚠️ " + shop + ": " + w.error);
             return st;
         }
         String text = w.text;
@@ -214,15 +239,16 @@ public class PilotChecker {
             JSONObject o = all.optJSONObject(i);
             if (anyTest && !o.optBoolean("test")) continue;
             if (o.optString("name").isEmpty()) o.put("name", productNameFromUrl(o.optString("url")));
+            o.put("aid", idPrefix + o.optString("id"));
             products.put(o);
         }
 
         // Neue Produkte erkennen
-        boolean firstRun = !prefs(c).contains("seen");
-        Set<String> seen = stringSet(c, "seen");
-        String lastPhase = prefs(c).getString("phaseKey", "");
+        boolean firstRun = !prefs(c).contains("seen" + sfx);
+        Set<String> seen = stringSet(c, "seen" + sfx);
+        String lastPhase = prefs(c).getString("phaseKey" + sfx, "");
         boolean phaseChanged = !phaseKey.isEmpty() && !phaseKey.equals(lastPhase);
-        Set<String> newIds = phaseChanged ? new HashSet<>() : stringSet(c, "newIds");
+        Set<String> newIds = phaseChanged ? new HashSet<>() : stringSet(c, "newIds" + sfx);
         List<String> freshNames = new ArrayList<>();
         for (int i = 0; i < products.length(); i++) {
             JSONObject o = products.getJSONObject(i);
@@ -236,25 +262,23 @@ public class PilotChecker {
             }
             o.put("isNew", newIds.contains(id));
         }
-        saveSet(c, "seen", seen, 400);
-        saveSet(c, "newIds", newIds, 100);
-        if (!phaseKey.isEmpty()) prefs(c).edit().putString("phaseKey", phaseKey).apply();
+        saveSet(c, "seen" + sfx, seen, 400);
+        saveSet(c, "newIds" + sfx, newIds, 100);
+        if (!phaseKey.isEmpty()) prefs(c).edit().putString("phaseKey" + sfx, phaseKey).apply();
 
         st.put("status", status);
         st.put("start", start > 0 ? fmt(start) : "");
         st.put("end", end > 0 ? fmt(end) : "");
         st.put("startYmd", start);
         st.put("endYmd", end);
-        st.put("today", now);
         st.put("headline", headline(text));
         st.put("products", products);
-        st.put("allLinks", all.length());
 
         // Benachrichtigungen
-        Set<String> notified = stringSet(c, "notified");
+        Set<String> notified = stringSet(c, "notified" + sfx);
         JSONObject applied = getApplied(c);
         int appliedCount = 0;
-        for (int i = 0; i < products.length(); i++) if (applied.has(products.getJSONObject(i).optString("id"))) appliedCount++;
+        for (int i = 0; i < products.length(); i++) if (applied.has(products.getJSONObject(i).optString("aid"))) appliedCount++;
         StringBuilder names = new StringBuilder();
         for (int i = 0; i < products.length() && i < 4; i++) {
             if (names.length() > 0) names.append(", ");
@@ -265,35 +289,34 @@ public class PilotChecker {
 
         if (notify && !phaseKey.isEmpty()) {
             if (status.equals("open") && notified.add("open:" + phaseKey)) {
-                showNotification(c, 101, "🚀 Testpiloten: Bewerbung ist offen!",
+                showNotification(c, nid + 1, "🚀 " + shop + " Testpiloten: Bewerbung ist offen!",
                         "Bewerben bis " + fmtShort(end) + (products.length() > 0 ? " – " + products.length() + " Testprodukte: " + names : ""),
-                        alarmOn(c), PAGE);
-                history(c, "🚀 Bewerbungsphase offen bis " + fmt(end));
+                        alarmOn(c), page);
+                history(c, "🚀 " + shop + ": Bewerbungsphase offen bis " + fmt(end));
                 told = true;
             } else if (status.equals("soon") && notified.add("soon:" + phaseKey)) {
-                showNotification(c, 102, "📅 Neue Testpiloten-Runde angekündigt",
-                        "Bewerbung vom " + fmtShort(start) + " bis " + fmtShort(end), false, PAGE);
-                history(c, "📅 Neue Runde angekündigt: " + fmt(start) + " – " + fmt(end));
+                showNotification(c, nid + 2, "📅 " + shop + ": neue Testpiloten-Runde angekündigt",
+                        "Bewerbung vom " + fmtShort(start) + " bis " + fmtShort(end), false, page);
+                history(c, "📅 " + shop + ": neue Runde angekündigt: " + fmt(start) + " – " + fmt(end));
                 told = true;
             }
             if (status.equals("open") && now == end && notified.add("last:" + phaseKey)) {
-                showNotification(c, 103, "⏰ Heute letzter Tag für die Testpiloten",
+                showNotification(c, nid + 3, "⏰ " + shop + ": heute letzter Tag für die Testpiloten",
                         products.length() > 0 ? "Du hast dich für " + appliedCount + " von " + products.length() + " Produkten beworben." : "Heute endet die Bewerbungsphase.",
-                        false, PAGE);
-                history(c, "⏰ Letzter Bewerbungstag");
+                        false, page);
+                history(c, "⏰ " + shop + ": letzter Bewerbungstag");
             }
         }
         if (notify && !freshNames.isEmpty() && !told) {
             String n = freshNames.size() == 1 ? freshNames.get(0) : android.text.TextUtils.join(", ", freshNames.subList(0, Math.min(4, freshNames.size())));
-            showNotification(c, 104, "🆕 " + freshNames.size() + " neue" + (freshNames.size() == 1 ? "s Testprodukt" : " Testprodukte"), n, false, PAGE);
+            showNotification(c, nid + 4, "🆕 " + shop + ": " + freshNames.size() + " neue" + (freshNames.size() == 1 ? "s Testprodukt" : " Testprodukte"), n, false, page);
         }
-        if (!freshNames.isEmpty()) history(c, "🆕 Neu: " + android.text.TextUtils.join(", ", freshNames));
-        saveSet(c, "notified", notified, 60);
+        if (!freshNames.isEmpty()) history(c, "🆕 " + shop + " neu: " + android.text.TextUtils.join(", ", freshNames));
+        saveSet(c, "notified" + sfx, notified, 60);
 
         if (prev == null || !status.equals(prev.optString("status"))) {
-            history(c, "Status: " + statusText(status) + (start > 0 ? " (" + fmt(start) + " – " + fmt(end) + ")" : ""));
+            history(c, shop + ": " + statusText(status) + (start > 0 ? " (" + fmt(start) + " – " + fmt(end) + ")" : ""));
         }
-        prefs(c).edit().putString("last", st.toString()).apply();
         return st;
     }
 
@@ -328,7 +351,7 @@ public class PilotChecker {
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
             NotificationChannel ch = new NotificationChannel(CHANNEL, "Testpiloten-Meldungen", NotificationManager.IMPORTANCE_HIGH);
-            ch.setDescription("Neue Testpiloten-Runden und Produkte");
+            ch.setDescription("Neue Testpiloten-Runden und Produkte bei MediaMarkt und Saturn");
             nm.createNotificationChannel(ch);
             NotificationChannel al = new NotificationChannel(CHANNEL_ALARM, "Bewerbung offen (Alarm)", NotificationManager.IMPORTANCE_HIGH);
             al.setDescription("Lauter Ton, sobald die Bewerbungsphase startet");

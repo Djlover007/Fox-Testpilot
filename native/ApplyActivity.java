@@ -28,7 +28,7 @@ import java.io.InputStream;
 import java.util.Collections;
 
 /**
- * MediaMarkt im App-Browser: hier meldest du dich einmal an (bleibt gespeichert),
+ * MediaMarkt/Saturn im App-Browser: hier meldest du dich einmal an (bleibt gespeichert),
  * und Bewerbungsformulare werden mit deinen gespeicherten Daten ausgefüllt.
  * Absenden musst du selbst.
  */
@@ -71,7 +71,7 @@ public class ApplyActivity extends Activity {
         close.setText("✕");
         close.setOnClickListener(v -> finish());
         TextView title = new TextView(this);
-        title.setText("🦊 MediaMarkt");
+        title.setText("🦊 Fox Testpilot");
         title.setTextColor(Color.WHITE);
         title.setTextSize(15);
         title.setPadding(20, 0, 0, 0);

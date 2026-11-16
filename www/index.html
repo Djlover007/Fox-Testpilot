@@ -72,6 +72,8 @@ h2 span{text-transform:none;letter-spacing:0}
 .form input,.form select,.form textarea{width:100%;border:0;border-radius:12px;padding:12px;font-size:15px;background:var(--chip);color:var(--text);margin-top:8px;outline:none;font-family:inherit}
 .form textarea{min-height:120px;resize:vertical}
 .form .two{display:flex;gap:8px}.form .two>*{flex:1;min-width:0}.form .two>.s{flex:0 0 32%}
+.shop{display:flex;align-items:center;gap:10px;background:var(--card);border-radius:14px;padding:10px 14px;margin-bottom:8px;font-size:14px}
+.shop span{flex:1}.shop .pg{border:0;background:var(--chip);color:var(--text);border-radius:10px;padding:7px 10px;font-size:13px;font-weight:600}
 </style>
 <script src="version.js"></script>
 </head>
@@ -88,7 +90,7 @@ h2 span{text-transform:none;letter-spacing:0}
   <section class="hero" id="hero">
     <div class="plane">✈️</div>
     <small id="last">Noch nicht geprüft</small>
-    <h1 id="herotitle">MediaMarkt Testpiloten</h1>
+    <h1 id="herotitle">Testpiloten</h1>
     <p id="herosub">Lädt …</p>
     <span class="cd" id="herocd" hidden></span>
     <div class="act"><button class="solid" id="openpage">Zur Aktion</button><button id="check">🔍 Jetzt prüfen</button></div>
@@ -97,11 +99,10 @@ h2 span{text-transform:none;letter-spacing:0}
   <button class="btn light" id="perm" hidden>🔔 Benachrichtigungen erlauben</button>
   <p class="err" id="err" hidden></p>
 
-  <h2>Testprodukte <span id="pcount"></span></h2>
   <div id="list"></div>
 
   <div class="tip">
-    <b>So bewirbst du dich:</b> Einmal unter ⚙️ deine Daten und deinen Bewerbungstext speichern und dich bei myMediaMarkt anmelden. Dann bei einem Produkt auf „Bewerben“ tippen und zum Teilnahmeformular gehen – Fox Testpilot füllt es aus. Du prüfst kurz, setzt die Häkchen und schickst selbst ab. Danach hier „Beworben“ abhaken.
+    <b>So bewirbst du dich:</b> Einmal unter ⚙️ deine Daten und deinen Bewerbungstext speichern und dich bei myMediaMarkt bzw. mySaturn anmelden. Dann bei einem Produkt auf „Bewerben“ tippen und zum Teilnahmeformular gehen – Fox Testpilot füllt es aus. Du prüfst kurz, setzt die Häkchen und schickst selbst ab. Danach hier „Beworben“ abhaken.
   </div>
 </div>
 
@@ -118,17 +119,18 @@ h2 span{text-transform:none;letter-spacing:0}
     <div class="two"><input id="p_first" placeholder="Vorname" autocomplete="given-name"><input id="p_last" placeholder="Nachname" autocomplete="family-name"></div>
     <div class="two"><input id="p_street" placeholder="Straße" autocomplete="address-line1"><input id="p_nr" class="s" placeholder="Nr."></div>
     <div class="two"><input id="p_zip" class="s" placeholder="PLZ" inputmode="numeric" autocomplete="postal-code"><input id="p_city" placeholder="Ort" autocomplete="address-level2"></div>
-    <input id="p_email" type="email" placeholder="E-Mail (wie bei myMediaMarkt)" autocomplete="email">
+    <input id="p_email" type="email" placeholder="E-Mail (wie bei myMediaMarkt / mySaturn)" autocomplete="email">
     <input id="p_phone" type="tel" placeholder="Telefon (optional)" autocomplete="tel">
     <input id="p_birth" placeholder="Geburtsdatum TT.MM.JJJJ (optional)" inputmode="numeric">
     <textarea id="p_text" placeholder="Dein Bewerbungstext. {produkt} wird durch den Produktnamen ersetzt."></textarea>
     <p>Tipp: Schreib in eigenen Worten, warum du gut testen kannst. <b>{produkt}</b> wird automatisch durch den Produktnamen ersetzt.</p>
     <button class="btn" id="psave">Speichern</button>
-    <button class="btn light" id="plogin">🔑 Bei myMediaMarkt anmelden (App-Browser)</button>
+    <button class="btn light" id="plogin">🔑 Bei myMediaMarkt anmelden</button>
+    <button class="btn light" id="plogin2">🔑 Bei mySaturn anmelden</button>
   </div>
   <button class="btn light" id="test">🔔 Test-Benachrichtigung senden</button>
   <details class="hist"><summary>📜 Verlauf</summary><div id="hist"></div></details>
-  <p class="note">Fox Testpilot öffnet die Testpiloten-Seite von MediaMarkt regelmäßig im Hintergrund und meldet sich, wenn eine neue Runde angekündigt wird, die Bewerbung startet, neue Testprodukte auftauchen und am letzten Bewerbungstag. Formulare füllt die App mit deinen Daten aus, absenden musst du selbst. Tipp: In den Android-Einstellungen für Fox Testpilot „Akku: Nicht eingeschränkt“ wählen.<br><span id="ver"></span></p>
+  <p class="note">Fox Testpilot öffnet die Testpiloten-Seiten von MediaMarkt und Saturn regelmäßig im Hintergrund und meldet sich, wenn eine neue Runde angekündigt wird, die Bewerbung startet, neue Testprodukte auftauchen und am letzten Bewerbungstag. Formulare füllt die App mit deinen Daten aus, absenden musst du selbst. Tipp: In den Android-Einstellungen für Fox Testpilot „Akku: Nicht eingeschränkt“ wählen.<br><span id="ver"></span></p>
 </div></div>
 
 <script>
@@ -139,6 +141,7 @@ var CAP = window.Capacitor;
 var NATIVE = !!(CAP && CAP.nativePromise);
 var state = { last: null, applied: {} };
 var checking = false;
+var heroUrl = PAGE;
 
 function call(method, options, timeoutMs) {
   if (!NATIVE) return Promise.reject(new Error("Nur in der Android-App verfügbar"));
@@ -161,48 +164,63 @@ function ago(t) {
   return "Geprüft " + d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit" }) + " " + d.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
 }
 
+function shops() { return (state.last && state.last.shops) || []; }
+function shopLine(l, now) {
+  if (l.status === "open") { var left = daysBetween(now, l.endYmd); return "🚀 Bewerbung offen bis " + shortDate(l.end) + (left <= 0 ? " – heute letzter Tag!" : ""); }
+  if (l.status === "soon") return l.startYmd ? "📅 Bewerbung " + shortDate(l.start) + " – " + l.end : "📅 Nächste Runde demnächst";
+  if (l.status === "over") return "Runde beendet am " + l.end;
+  return l.status ? "Gerade keine Testaktion" : "Noch nicht geprüft";
+}
+
 function renderHero() {
-  var l = state.last, h = $("hero"), cd = $("herocd");
-  h.className = "hero"; cd.hidden = true;
-  $("last").textContent = checking ? "Prüfe gerade …" : ago(l && l.time);
-  if (!l) { $("herotitle").textContent = "MediaMarkt Testpiloten"; $("herosub").textContent = NATIVE ? "Tippe auf „Jetzt prüfen“" : "Diese Oberfläche läuft nur in der Android-App"; return; }
-  var now = todayYmd();
-  if (l.status === "open") {
+  var h = $("hero"), cd = $("herocd"), list = shops(), now = todayYmd();
+  h.className = "hero"; cd.hidden = true; heroUrl = PAGE;
+  $("last").textContent = checking ? "Prüfe gerade …" : ago(state.last && state.last.time);
+  if (!list.length) { $("herotitle").textContent = "Testpiloten"; $("herosub").textContent = NATIVE ? "Tippe auf „Jetzt prüfen“" : "Diese Oberfläche läuft nur in der Android-App"; return; }
+  var open = list.filter(function (l) { return l.status === "open"; }).sort(function (a, b) { return a.endYmd - b.endYmd; });
+  var soon = list.filter(function (l) { return l.status === "soon"; }).sort(function (a, b) { return (a.startYmd || 99999999) - (b.startYmd || 99999999); });
+  var names = function (a) { return a.map(function (l) { return l.name; }).join(" & "); };
+  if (open.length) {
+    var l = open[0]; heroUrl = l.url;
     h.className = "hero open";
     $("herotitle").textContent = "Bewerbung ist offen! 🚀";
-    $("herosub").textContent = "Bewerbungsphase " + shortDate(l.start) + " – " + l.end;
+    $("herosub").textContent = names(open) + " · " + shortDate(l.start) + " – " + l.end;
     var left = daysBetween(now, l.endYmd);
     cd.textContent = left <= 0 ? "⏰ Heute letzter Tag!" : "Noch " + (left + 1) + " Tage (bis " + shortDate(l.end) + ")";
     cd.hidden = false;
-  } else if (l.status === "soon") {
+  } else if (soon.length) {
+    var n = soon[0]; heroUrl = n.url;
     h.className = "hero soon";
     $("herotitle").textContent = "Nächste Runde kommt 📅";
-    if (l.startYmd) {
-      $("herosub").textContent = "Bewerbung vom " + shortDate(l.start) + " bis " + l.end;
-      var d = daysBetween(now, l.startYmd);
+    if (n.startYmd) {
+      $("herosub").textContent = n.name + ": Bewerbung vom " + shortDate(n.start) + " bis " + n.end;
+      var d = daysBetween(now, n.startYmd);
       cd.textContent = d <= 1 ? "Startet morgen" : "Startet in " + d + " Tagen"; cd.hidden = false;
-    } else $("herosub").textContent = l.headline || "Termin noch nicht bekannt – ich passe auf";
+    } else $("herosub").textContent = names(soon) + ": Termin noch nicht bekannt – ich passe auf";
   } else {
     $("herotitle").textContent = "Gerade keine Testaktion";
-    $("herosub").textContent = (l.status === "over" ? "Letzte Runde endete am " + l.end + ". " : "") + "Ich melde mich, sobald es eine neue Runde gibt.";
+    $("herosub").textContent = "Ich melde mich, sobald es bei MediaMarkt oder Saturn eine neue Runde gibt.";
   }
-  if (l.error) { h.className = "hero err"; $("herosub").textContent = "⚠️ " + l.error + (l.status ? " (zeige letzten Stand)" : ""); }
+  var errs = list.filter(function (l) { return l.error; });
+  if (errs.length === list.length) { h.className = "hero err"; $("herosub").textContent = "⚠️ " + errs[0].error; }
 }
 
 function renderList() {
-  var ps = (state.last && state.last.products) || [];
-  var done = ps.filter(function (p) { return state.applied[p.id]; }).length;
-  $("pcount").textContent = ps.length ? done + " / " + ps.length + " beworben" : "";
-  if (!ps.length) {
-    $("list").innerHTML = '<div class="empty">' + (state.last ? "Auf der Seite stehen gerade keine Testprodukte.<br>MediaMarkt startet meist einmal im Monat eine neue Runde (Bewerbung Mo–Do)." : "Noch nicht geprüft.") + "</div>";
-    return;
-  }
-  $("list").innerHTML = ps.map(function (p, i) {
-    var ok = !!state.applied[p.id];
-    var img = p.img ? ' style="background-image:url(&quot;' + esc(p.img) + '&quot;)"' : "";
-    return '<div class="prod' + (ok ? " done" : "") + '"><div class="im"' + img + ">" + (p.img ? "" : "📦") + '</div><div class="t"><b>' + esc(p.name) +
-      (p.isNew ? '<span class="badge">NEU</span>' : "") + '</b><div class="row"><button class="go" data-i="' + i + '">Bewerben ↗</button>' +
-      '<label><input type="checkbox" data-id="' + esc(p.id) + '"' + (ok ? " checked" : "") + "> Beworben</label></div></div></div>";
+  var list = shops(), now = todayYmd();
+  if (!list.length) { $("list").innerHTML = '<div class="empty">Noch nicht geprüft.</div>'; return; }
+  $("list").innerHTML = list.map(function (l, si) {
+    var ps = l.products || [];
+    var done = ps.filter(function (p) { return state.applied[p.aid]; }).length;
+    var head = '<h2>' + esc(l.name) + ' <span>' + (ps.length ? done + " / " + ps.length + " beworben" : "") + '</span></h2>' +
+      '<div class="shop"><span>' + esc(l.error ? "⚠️ " + l.error : shopLine(l, now)) + '</span><button class="pg" data-s="' + si + '">Seite ↗</button></div>';
+    if (!ps.length) return head + (l.error ? "" : '<div class="empty">Gerade keine Testprodukte auf der Seite.</div>');
+    return head + ps.map(function (p, i) {
+      var ok = !!state.applied[p.aid];
+      var img = p.img ? ' style="background-image:url(&quot;' + esc(p.img) + '&quot;)"' : "";
+      return '<div class="prod' + (ok ? " done" : "") + '"><div class="im"' + img + ">" + (p.img ? "" : "📦") + '</div><div class="t"><b>' + esc(p.name) +
+        (p.isNew ? '<span class="badge">NEU</span>' : "") + '</b><div class="row"><button class="go" data-s="' + si + '" data-i="' + i + '">Bewerben ↗</button>' +
+        '<label><input type="checkbox" data-id="' + esc(p.aid) + '"' + (ok ? " checked" : "") + "> Beworben</label></div></div></div>";
+    }).join("");
   }).join("");
 }
 
@@ -210,7 +228,7 @@ function render() { renderHero(); renderList(); }
 
 function load() {
   return call("getState", {}, 10000).then(function (s) {
-    state.last = s.last || null;
+    state.last = s.last && s.last.shops ? s.last : null;
     state.applied = s.applied || {};
     $("perm").hidden = !!s.notifications;
     $("bg").checked = !!s.background;
@@ -233,9 +251,9 @@ function check() {
   checking = true;
   var b = $("check"); b.disabled = true; b.textContent = "⏳ Prüfe …";
   $("foxlogo").classList.add("spin"); renderHero();
-  var before = state.last && state.last.status;
-  call("checkNow", {}, 120000).then(function (s) {
-    if (s.status === "open" && before !== "open") confetti();
+  var before = shops().some(function (l) { return l.status === "open"; });
+  call("checkNow", {}, 200000).then(function (s) {
+    if (!before && (s.shops || []).some(function (l) { return l.status === "open"; })) confetti();
     return load();
   }).catch(function (e) { alertErr(e.message); }).then(function () {
     checking = false; b.disabled = false; b.textContent = "🔍 Jetzt prüfen";
@@ -261,19 +279,22 @@ $("psave").onclick = function () {
   }).catch(function (e) { alertErr(e.message); });
 };
 $("plogin").onclick = function () { openLink("https://www.mediamarkt.de/de/myaccount"); };
+$("plogin2").onclick = function () { openLink("https://www.saturn.de/de/myaccount"); };
 
 $("check").onclick = check;
-$("openpage").onclick = function () { openLink(PAGE); };
+$("openpage").onclick = function () { openLink(heroUrl); };
 $("list").onclick = function (ev) {
   var g = ev.target.closest(".go");
-  if (g) { var p = state.last.products[+g.dataset.i]; if (p) openLink(p.url, p.name); }
+  if (g) { var p = shops()[+g.dataset.s].products[+g.dataset.i]; if (p) openLink(p.url, p.name); return; }
+  var pg = ev.target.closest(".pg");
+  if (pg) openLink(shops()[+pg.dataset.s].url);
 };
 $("list").onchange = function (ev) {
   var cb = ev.target; if (!cb.dataset.id) return;
   call("setApplied", { id: cb.dataset.id, on: cb.checked }, 10000).then(function (a) {
     state.applied = a || {}; renderList();
-    var ps = state.last.products || [];
-    if (cb.checked && ps.length && ps.every(function (p) { return state.applied[p.id]; })) confetti();
+    var ps = [].concat.apply([], shops().map(function (l) { return l.products || []; }));
+    if (cb.checked && ps.length && ps.every(function (p) { return state.applied[p.aid]; })) confetti();
   }).catch(function (e) { alertErr(e.message); });
 };
 function saveSettings(o) { call("setSettings", o, 10000).then(load).catch(function (e) { alertErr(e.message); }); }
