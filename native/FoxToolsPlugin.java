@@ -178,6 +178,33 @@ public class FoxToolsPlugin extends Plugin {
         call.resolve(r);
     }
 
+    /** Öffnet MediaMarkt im App-Browser und füllt Formulare mit den gespeicherten Daten aus. */
+    @PluginMethod
+    public void openApply(PluginCall call) {
+        Intent i = new Intent(getContext(), ApplyActivity.class);
+        i.putExtra("url", call.getString("url", PilotChecker.PAGE));
+        i.putExtra("name", call.getString("name", ""));
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        getContext().startActivity(i);
+        call.resolve();
+    }
+
+    @PluginMethod
+    public void getProfile(PluginCall call) {
+        try {
+            call.resolve(JSObject.fromJSONObject(new JSONObject(PilotChecker.prefs(getContext()).getString("profile", "{}"))));
+        } catch (Exception e) {
+            call.resolve(new JSObject());
+        }
+    }
+
+    @PluginMethod
+    public void setProfile(PluginCall call) {
+        JSObject p = call.getObject("profile", new JSObject());
+        PilotChecker.prefs(getContext()).edit().putString("profile", p.toString()).apply();
+        call.resolve();
+    }
+
     /** Lädt die neue APK herunter und öffnet den Android-Installationsdialog. */
     @PluginMethod
     public void installUpdate(PluginCall call) {

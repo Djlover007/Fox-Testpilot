@@ -67,6 +67,11 @@ h2 span{text-transform:none;letter-spacing:0}
 .confetti{position:fixed;inset:0;pointer-events:none;z-index:40;overflow:hidden}
 .confetti i{position:absolute;top:-14px;width:9px;height:14px;border-radius:2px;animation:fall 2.6s ease-in forwards}
 @keyframes fall{to{transform:translateY(105vh) rotate(720deg);opacity:.7}}
+.form{background:var(--card);border-radius:16px;padding:14px 16px;margin-top:10px}
+.form h3{font-size:16px;margin-bottom:4px}.form p{font-size:13px;color:var(--muted);line-height:1.45}
+.form input,.form select,.form textarea{width:100%;border:0;border-radius:12px;padding:12px;font-size:15px;background:var(--chip);color:var(--text);margin-top:8px;outline:none;font-family:inherit}
+.form textarea{min-height:120px;resize:vertical}
+.form .two{display:flex;gap:8px}.form .two>*{flex:1;min-width:0}.form .two>.s{flex:0 0 32%}
 </style>
 <script src="version.js"></script>
 </head>
@@ -96,7 +101,7 @@ h2 span{text-transform:none;letter-spacing:0}
   <div id="list"></div>
 
   <div class="tip">
-    <b>So bewirbst du dich:</b> Mit deinem myMediaMarkt-Konto im Browser anmelden, Produkt öffnen und unten auf der Seite das Teilnahmeformular ausfüllen (kurz schreiben, warum du testen willst). In der MediaMarkt-App geht die Bewerbung nicht. Danach hier „Beworben“ abhaken.
+    <b>So bewirbst du dich:</b> Einmal unter ⚙️ deine Daten und deinen Bewerbungstext speichern und dich bei myMediaMarkt anmelden. Dann bei einem Produkt auf „Bewerben“ tippen und zum Teilnahmeformular gehen – Fox Testpilot füllt es aus. Du prüfst kurz, setzt die Häkchen und schickst selbst ab. Danach hier „Beworben“ abhaken.
   </div>
 </div>
 
@@ -106,9 +111,24 @@ h2 span{text-transform:none;letter-spacing:0}
   <label class="opt"><div>⏱️ Prüfen alle<small>Android kann die Abstände im Akku-Sparmodus verlängern</small></div>
     <select id="interval"><option value="15">15 Min.</option><option value="30">30 Min.</option><option value="60">1 Std.</option><option value="180">3 Std.</option></select></label>
   <label class="opt"><div>🔊 Lauter Alarm bei Start<small>Alarmton, sobald die Bewerbungsphase beginnt</small></div><input type="checkbox" id="alarm"></label>
+  <div class="form">
+    <h3>✍️ Automatisch ausfüllen</h3>
+    <p>Diese Daten trägt Fox Testpilot ins Bewerbungsformular ein. Sie bleiben nur auf diesem Handy.</p>
+    <select id="p_salutation"><option value="">Anrede (optional)</option><option>Herr</option><option>Frau</option></select>
+    <div class="two"><input id="p_first" placeholder="Vorname" autocomplete="given-name"><input id="p_last" placeholder="Nachname" autocomplete="family-name"></div>
+    <div class="two"><input id="p_street" placeholder="Straße" autocomplete="address-line1"><input id="p_nr" class="s" placeholder="Nr."></div>
+    <div class="two"><input id="p_zip" class="s" placeholder="PLZ" inputmode="numeric" autocomplete="postal-code"><input id="p_city" placeholder="Ort" autocomplete="address-level2"></div>
+    <input id="p_email" type="email" placeholder="E-Mail (wie bei myMediaMarkt)" autocomplete="email">
+    <input id="p_phone" type="tel" placeholder="Telefon (optional)" autocomplete="tel">
+    <input id="p_birth" placeholder="Geburtsdatum TT.MM.JJJJ (optional)" inputmode="numeric">
+    <textarea id="p_text" placeholder="Dein Bewerbungstext. {produkt} wird durch den Produktnamen ersetzt."></textarea>
+    <p>Tipp: Schreib in eigenen Worten, warum du gut testen kannst. <b>{produkt}</b> wird automatisch durch den Produktnamen ersetzt.</p>
+    <button class="btn" id="psave">Speichern</button>
+    <button class="btn light" id="plogin">🔑 Bei myMediaMarkt anmelden (App-Browser)</button>
+  </div>
   <button class="btn light" id="test">🔔 Test-Benachrichtigung senden</button>
   <details class="hist"><summary>📜 Verlauf</summary><div id="hist"></div></details>
-  <p class="note">Fox Testpilot öffnet die Testpiloten-Seite von MediaMarkt regelmäßig im Hintergrund und meldet sich, wenn eine neue Runde angekündigt wird, die Bewerbung startet, neue Testprodukte auftauchen und am letzten Bewerbungstag. Bewerben musst du dich selbst. Tipp: In den Android-Einstellungen für Fox Testpilot „Akku: Nicht eingeschränkt“ wählen.<br><span id="ver"></span></p>
+  <p class="note">Fox Testpilot öffnet die Testpiloten-Seite von MediaMarkt regelmäßig im Hintergrund und meldet sich, wenn eine neue Runde angekündigt wird, die Bewerbung startet, neue Testprodukte auftauchen und am letzten Bewerbungstag. Formulare füllt die App mit deinen Daten aus, absenden musst du selbst. Tipp: In den Android-Einstellungen für Fox Testpilot „Akku: Nicht eingeschränkt“ wählen.<br><span id="ver"></span></p>
 </div></div>
 
 <script>
@@ -223,13 +243,30 @@ function check() {
   });
 }
 
-function openLink(url) { call("openUrl", { url: url }).catch(function () { window.open(url, "_blank"); }); }
+function openLink(url, name) { call("openApply", { url: url, name: name || "" }).catch(function () { window.open(url, "_blank"); }); }
+var PF = ["salutation", "first", "last", "street", "nr", "zip", "city", "email", "phone", "birth", "text"];
+var DEFAULT_TEXT = "Ich würde {produkt} gerne ausgiebig im Alltag testen und danach eine ehrliche, ausführliche Bewertung mit Fotos schreiben.";
+function loadProfile() {
+  call("getProfile", {}, 10000).then(function (p) {
+    PF.forEach(function (k) { $("p_" + k).value = p[k] || ""; });
+    if (!p.text) $("p_text").value = DEFAULT_TEXT;
+  }).catch(function () {});
+}
+$("psave").onclick = function () {
+  var p = {};
+  PF.forEach(function (k) { p[k] = $("p_" + k).value.trim(); });
+  call("setProfile", { profile: p }, 10000).then(function () {
+    $("psave").textContent = "✅ Gespeichert";
+    setTimeout(function () { $("psave").textContent = "Speichern"; }, 2500);
+  }).catch(function (e) { alertErr(e.message); });
+};
+$("plogin").onclick = function () { openLink("https://www.mediamarkt.de/de/myaccount"); };
 
 $("check").onclick = check;
 $("openpage").onclick = function () { openLink(PAGE); };
 $("list").onclick = function (ev) {
   var g = ev.target.closest(".go");
-  if (g) { var p = state.last.products[+g.dataset.i]; if (p) openLink(p.url); }
+  if (g) { var p = state.last.products[+g.dataset.i]; if (p) openLink(p.url, p.name); }
 };
 $("list").onchange = function (ev) {
   var cb = ev.target; if (!cb.dataset.id) return;
@@ -282,6 +319,7 @@ function checkUpdate() {
 $("updlink").onclick = function (ev) { ev.preventDefault(); installUpdate(); };
 
 checkUpdate();
+loadProfile();
 load().then(function () {
   if (NATIVE && $("perm").hidden === false) call("askNotifications").then(function (r) { $("perm").hidden = !!r.granted; }).catch(function () {});
   if (NATIVE && (!state.last || Date.now() - state.last.time > 10 * 60000)) check();
