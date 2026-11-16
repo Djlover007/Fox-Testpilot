@@ -81,6 +81,10 @@ public class FoxToolsPlugin extends Plugin {
             r.put("background", PilotChecker.backgroundOn(getContext()));
             r.put("interval", PilotChecker.intervalMinutes(getContext()));
             r.put("alarm", PilotChecker.alarmOn(getContext()));
+            r.put("quiet", PilotChecker.prefs(getContext()).getBoolean("quiet", false));
+            r.put("quietFrom", PilotChecker.prefs(getContext()).getInt("quietFrom", 22));
+            r.put("quietTo", PilotChecker.prefs(getContext()).getInt("quietTo", 7));
+            r.put("info", JSObject.fromJSONObject(PilotChecker.getInfo(getContext(), PilotChecker.activePerson(getContext()))));
             r.put("history", new JSArray(PilotChecker.prefs(getContext()).getString("history", "[]")));
             call.resolve(r);
         } catch (Exception e) {
@@ -102,7 +106,7 @@ public class FoxToolsPlugin extends Plugin {
     @PluginMethod
     public void setApplied(PluginCall call) {
         try {
-            PilotChecker.setApplied(getContext(), call.getString("id", ""), Boolean.TRUE.equals(call.getBoolean("on", true)));
+            PilotChecker.setApplied(getContext(), call.getString("id", ""), Boolean.TRUE.equals(call.getBoolean("on", true)), call.getString("name", ""), call.getString("shop", ""));
             call.resolve(JSObject.fromJSONObject(PilotChecker.getApplied(getContext())));
         } catch (Exception e) {
             call.reject(e.getMessage());
@@ -115,6 +119,9 @@ public class FoxToolsPlugin extends Plugin {
         if (call.hasOption("background")) e.putBoolean("background", Boolean.TRUE.equals(call.getBoolean("background")));
         if (call.hasOption("interval")) e.putInt("interval", Math.max(15, call.getInt("interval", 30)));
         if (call.hasOption("alarm")) e.putBoolean("alarm", Boolean.TRUE.equals(call.getBoolean("alarm")));
+        if (call.hasOption("quiet")) e.putBoolean("quiet", Boolean.TRUE.equals(call.getBoolean("quiet")));
+        if (call.hasOption("quietFrom")) e.putInt("quietFrom", call.getInt("quietFrom", 22));
+        if (call.hasOption("quietTo")) e.putInt("quietTo", call.getInt("quietTo", 7));
         e.commit();
         applyBackground(true);
         getState(call);
@@ -234,6 +241,7 @@ public class FoxToolsPlugin extends Plugin {
         try {
             android.webkit.CookieManager.getInstance().removeAllCookies(null);
             android.webkit.CookieManager.getInstance().flush();
+            android.webkit.WebStorage.getInstance().deleteAllData();
         } catch (Exception ignored) {
         }
     }
@@ -332,6 +340,164 @@ public class FoxToolsPlugin extends Plugin {
             call.resolve(JSObject.fromJSONObject(Accounts.overview(getContext())));
         } catch (Exception e) {
             call.reject("Speichern fehlgeschlagen: " + e.getMessage());
+        }
+    }
+
+    // ---- Diagnose, Anmelde-Status, Ergebnisse, Kalender, Sicherung ----
+
+    @PluginMethod
+    public void diagnose(PluginCall call) {
+        new Thread(() -> {
+            JSObject r = new JSObject();
+            r.put("text", PilotChecker.diagnose(getContext()));
+            call.resolve(r);
+        }).start();
+    }
+
+    @PluginMethod
+    public void copyText(PluginCall call) {
+        try {
+            android.content.ClipboardManager cm = (android.content.ClipboardManager) getContext().getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("Fox Testpilot", call.getString("text", "")));
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("Kopieren fehlgeschlagen");
+        }
+    }
+
+    @PluginMethod
+    public void shareText(PluginCall call) {
+        try {
+            Intent send = new Intent(Intent.ACTION_SEND);
+            send.setType("text/plain");
+            send.putExtra(Intent.EXTRA_SUBJECT, call.getString("title", "Fox Testpilot"));
+            send.putExtra(Intent.EXTRA_TEXT, call.getString("text", ""));
+            Intent ch = Intent.createChooser(send, call.getString("title", "Teilen"));
+            ch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(ch);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("Teilen fehlgeschlagen");
+        }
+    }
+
+    /** Prüft im Hintergrund-Browser, ob die gewählte Person bei den Shops angemeldet ist. */
+    @PluginMethod
+    public void loginStatus(PluginCall call) {
+        new Thread(() -> {
+            JSObject r = new JSObject();
+            for (String[] s : Accounts.SHOPS) r.put(s[0], PilotChecker.loginState(getContext(), s[1]));
+            call.resolve(r);
+        }).start();
+    }
+
+    @PluginMethod
+    public void setResult(PluginCall call) {
+        try {
+            if (Boolean.TRUE.equals(call.getBoolean("remove", false))) PilotChecker.removeInfo(getContext(), call.getString("aid", ""));
+            else PilotChecker.setResult(getContext(), call.getString("aid", ""), call.getString("result", ""), call.getString("due", ""));
+            getState(call);
+        } catch (Exception e) {
+            call.reject("Speichern fehlgeschlagen: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void addCalendar(PluginCall call) {
+        try {
+            long begin = (long) (double) call.getDouble("begin", 0.0);
+            Intent i = new Intent(Intent.ACTION_INSERT, android.provider.CalendarContract.Events.CONTENT_URI);
+            i.putExtra(android.provider.CalendarContract.Events.TITLE, call.getString("title", "Testpiloten"));
+            i.putExtra(android.provider.CalendarContract.Events.DESCRIPTION, call.getString("url", ""));
+            i.putExtra(android.provider.CalendarContract.EXTRA_EVENT_BEGIN_TIME, begin);
+            i.putExtra(android.provider.CalendarContract.EXTRA_EVENT_END_TIME, begin + 30 * 60000L);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(i);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("Keine Kalender-App gefunden");
+        }
+    }
+
+    /** Sicherung: Personen, Daten, Häkchen, Konto-E-Mails und Einstellungen – bewusst OHNE Passwörter. */
+    @PluginMethod
+    public void exportData(PluginCall call) {
+        try {
+            android.content.SharedPreferences sp = PilotChecker.prefs(getContext());
+            JSONObject out = new JSONObject();
+            out.put("app", "fox-testpilot");
+            out.put("v", 1);
+            org.json.JSONArray persons = PilotChecker.persons(getContext()), list = new org.json.JSONArray();
+            for (int i = 0; i < persons.length(); i++) {
+                JSONObject p = new JSONObject(persons.getJSONObject(i).toString());
+                String id = p.optString("id"), sfx = PilotChecker.sfx(id);
+                p.put("profile", new JSONObject(sp.getString("profile" + sfx, "{}")));
+                p.put("applied", new JSONObject(sp.getString("applied" + sfx, "{}")));
+                p.put("info", new JSONObject(sp.getString("ainfo" + sfx, "{}")));
+                JSONObject mails = new JSONObject();
+                for (String[] s : Accounts.SHOPS) mails.put(s[0], Accounts.emailOf(getContext(), id, s[0]));
+                p.put("emails", mails);
+                list.put(p);
+            }
+            out.put("persons", list);
+            out.put("active", PilotChecker.activePerson(getContext()));
+            JSONObject set = new JSONObject();
+            set.put("background", sp.getBoolean("background", true)).put("interval", sp.getInt("interval", 30)).put("alarm", sp.getBoolean("alarm", false))
+                    .put("quiet", sp.getBoolean("quiet", false)).put("quietFrom", sp.getInt("quietFrom", 22)).put("quietTo", sp.getInt("quietTo", 7));
+            out.put("settings", set);
+            JSObject r = new JSObject();
+            r.put("json", out.toString());
+            call.resolve(r);
+        } catch (Exception e) {
+            call.reject("Sicherung fehlgeschlagen: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void importData(PluginCall call) {
+        try {
+            JSONObject in = new JSONObject(call.getString("json", "").trim());
+            org.json.JSONArray list = in.optJSONArray("persons");
+            if (!"fox-testpilot".equals(in.optString("app")) || list == null || list.length() == 0) {
+                call.reject("Das ist keine Fox-Testpilot-Sicherung");
+                return;
+            }
+            android.content.SharedPreferences.Editor e = PilotChecker.prefs(getContext()).edit();
+            org.json.JSONArray persons = new org.json.JSONArray();
+            for (int i = 0; i < list.length() && i < 6; i++) {
+                JSONObject p = list.getJSONObject(i);
+                String id = p.optString("id").replaceAll("[^A-Za-z0-9]", "");
+                if (id.isEmpty()) continue;
+                String sfx = PilotChecker.sfx(id);
+                persons.put(new JSONObject().put("id", id).put("label", p.optString("label", "Person")));
+                e.putString("profile" + sfx, p.optJSONObject("profile") == null ? "{}" : p.optJSONObject("profile").toString());
+                e.putString("applied" + sfx, p.optJSONObject("applied") == null ? "{}" : p.optJSONObject("applied").toString());
+                e.putString("ainfo" + sfx, p.optJSONObject("info") == null ? "{}" : p.optJSONObject("info").toString());
+                JSONObject mails = p.optJSONObject("emails");
+                if (mails != null) for (String[] s : Accounts.SHOPS) {
+                    if (!mails.optString(s[0]).isEmpty()) Accounts.setEmailOf(getContext(), id, s[0], mails.optString(s[0]));
+                }
+            }
+            if (persons.length() == 0) {
+                call.reject("Keine Personen in der Sicherung");
+                return;
+            }
+            e.putString("persons", persons.toString());
+            e.putString("activePerson", persons.getJSONObject(0).optString("id"));
+            JSONObject set = in.optJSONObject("settings");
+            if (set != null) {
+                e.putBoolean("background", set.optBoolean("background", true)).putInt("interval", Math.max(15, set.optInt("interval", 30)))
+                        .putBoolean("alarm", set.optBoolean("alarm", false)).putBoolean("quiet", set.optBoolean("quiet", false))
+                        .putInt("quietFrom", set.optInt("quietFrom", 22)).putInt("quietTo", set.optInt("quietTo", 7));
+            }
+            e.commit();
+            logoutBrowser();
+            applyBackground(true);
+            getState(call);
+        } catch (org.json.JSONException ex) {
+            call.reject("Der Text ist keine gültige Sicherung");
+        } catch (Exception ex) {
+            call.reject("Import fehlgeschlagen: " + ex.getMessage());
         }
     }
 

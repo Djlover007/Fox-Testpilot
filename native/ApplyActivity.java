@@ -43,18 +43,37 @@ public class ApplyActivity extends Activity {
     private long stepStart = 0, submittedAt = 0;
     private boolean warned = false, stepDone = false;
     private androidx.webkit.ScriptHandler handler;
+    private final java.util.List<androidx.webkit.ScriptHandler> loginHandlers = new java.util.ArrayList<>();
+    private boolean loginViaStart = false;
+    private int total = 0, loginOk = 0;
     private TextView titleView;
     private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
 
     private void loadStep() {
         if (isFinishing()) return;
         if (qi >= queue.length()) {
-            Toast.makeText(this, "🤖 Fertig: " + sentCount + " von " + queue.length() + " Bewerbungen abgeschickt", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "🤖 Fertig: " + sentCount + " von " + total + " Bewerbungen abgeschickt", Toast.LENGTH_LONG).show();
             finish();
             return;
         }
         JSONObject it = queue.optJSONObject(qi);
-        script = buildScript(this, it.optString("name"), it.optString("url"), it.optString("aid"));
+        // Andere Person an der Reihe: Profil umschalten, abmelden, Anmelde-Skripte der neuen Person laden
+        String person = it.optString("person");
+        if (!person.isEmpty() && !person.equals(PilotChecker.activePerson(this))) {
+            PilotChecker.prefs(this).edit().putString("activePerson", person).commit();
+            try {
+                android.webkit.WebStorage.getInstance().deleteAllData();
+            } catch (Exception ignored) {
+            }
+            CookieManager.getInstance().removeAllCookies(ok -> {
+                CookieManager.getInstance().flush();
+                addLoginScripts();
+                loadStep();
+            });
+            return;
+        }
+        boolean login = it.optBoolean("login");
+        script = login ? "" : buildScript(this, it.optString("name"), it.optString("url"), it.optString("aid"));
         try {
             if (handler != null) handler.remove();
             handler = null;
@@ -68,14 +87,17 @@ public class ApplyActivity extends Activity {
         submittedAt = 0;
         warned = false;
         stepDone = false;
-        titleView.setText("🤖 " + (qi + 1) + "/" + queue.length() + " " + it.optString("name"));
+        loginOk = 0;
+        allFrames = handler != null;
+        String who = it.optString("label");
+        titleView.setText((login ? "🔑 " : "🤖 ") + (qi + 1) + "/" + queue.length() + " " + (who.isEmpty() ? "" : who + ": ") + it.optString("name"));
         web.loadUrl(it.optString("url"));
     }
 
     private void stepFinished() {
         if (stepDone) return;
         stepDone = true;
-        PilotChecker.setApplied(this, queue.optJSONObject(qi).optString("aid"), true);
+        PilotChecker.setApplied(this, queue.optJSONObject(qi).optString("aid"), true, queue.optJSONObject(qi).optString("name"), queue.optJSONObject(qi).optString("shop"));
         sentCount++;
         Toast.makeText(this, "✅ Abgeschickt: " + queue.optJSONObject(qi).optString("name"), Toast.LENGTH_SHORT).show();
         qi++;
@@ -86,7 +108,21 @@ public class ApplyActivity extends Activity {
         @Override
         public void run() {
             if (isFinishing() || queue == null) return;
-            if (!stepDone) {
+            JSONObject cur = qi < queue.length() ? queue.optJSONObject(qi) : null;
+            if (cur != null && cur.optBoolean("login")) {
+                // Anmelde-Schritt: weiter, sobald die Seite nicht mehr die Anmeldung zeigt
+                long el = System.currentTimeMillis() - stepStart;
+                String u = web.getUrl();
+                if (el > 12000 && u != null && !PilotChecker.isLoginUrl(u)) loginOk++;
+                else loginOk = 0;
+                if (loginOk >= 2) {
+                    qi++;
+                    loadStep();
+                } else if (!warned && el > 50000) {
+                    warned = true;
+                    Toast.makeText(ApplyActivity.this, "Anmeldung hat nicht automatisch geklappt – bitte selbst anmelden, dann „Weiter ▶“ tippen", Toast.LENGTH_LONG).show();
+                }
+            } else if (!stepDone) {
                 web.evaluateJavascript("window.__foxState||''", v -> {
                     if (stepDone || v == null) return;
                     long now = System.currentTimeMillis();
@@ -109,7 +145,23 @@ public class ApplyActivity extends Activity {
         try {
             JSONObject p = new JSONObject(PilotChecker.prefs(c).getString(PilotChecker.profileKey(c), "{}"));
             String name = product == null || product.trim().isEmpty() ? "das Testprodukt" : product.trim();
-            p.put("text", p.optString("text").replace("{produkt}", name));
+            // Eigener Text je Kategorie: passt ein Stichwort zum Produktnamen, wird dieser Text genommen
+            String text = p.optString("text"), lowName = name.toLowerCase(java.util.Locale.GERMANY);
+            pick:
+            for (int i = 1; i <= 3; i++) {
+                if (p.optString("t" + i).trim().isEmpty()) continue;
+                for (String k : p.optString("k" + i).toLowerCase(java.util.Locale.GERMANY).split("[,;]")) {
+                    if (!k.trim().isEmpty() && lowName.contains(k.trim())) {
+                        text = p.optString("t" + i);
+                        break pick;
+                    }
+                }
+            }
+            p.put("text", text.replace("{produkt}", name));
+            for (int i = 1; i <= 3; i++) {
+                p.remove("t" + i);
+                p.remove("k" + i);
+            }
             // Im Formular die E-Mail des Kontos verwenden, mit dem man bei diesem Shop angemeldet ist
             String shop = url == null ? null : Accounts.shopForUrl(url);
             String mail = shop == null ? "" : Accounts.email(c, shop);
@@ -130,6 +182,30 @@ public class ApplyActivity extends Activity {
         }
     }
 
+    /** Anmelde-Skripte der gewählten Person: jeweils nur auf der eigenen Shop-Domain, nie in fremden Rahmen. */
+    private void addLoginScripts() {
+        try {
+            for (androidx.webkit.ScriptHandler h : loginHandlers) h.remove();
+        } catch (Exception ignored) {
+        }
+        loginHandlers.clear();
+        loginViaStart = false;
+        try {
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                for (String[] shop : Accounts.SHOPS) {
+                    String js = Accounts.loginScript(this, shop[0]);
+                    if (js.isEmpty()) continue;
+                    java.util.Set<String> origins = new java.util.HashSet<>();
+                    origins.add("https://" + shop[1]);
+                    origins.add("https://*." + shop[1]);
+                    loginHandlers.add(WebViewCompat.addDocumentStartJavaScript(web, js, origins));
+                }
+                loginViaStart = true;
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -146,7 +222,10 @@ public class ApplyActivity extends Activity {
         close.setOnClickListener(v -> finish());
         try {
             String q = getIntent().getStringExtra("queue");
-            if (q != null) queue = new org.json.JSONArray(q);
+            if (q != null) {
+                queue = new org.json.JSONArray(q);
+                for (int i = 0; i < queue.length(); i++) if (!queue.optJSONObject(i).optBoolean("login")) total++;
+            }
         } catch (Exception ignored) {
         }
         TextView title = new TextView(this);
@@ -158,6 +237,21 @@ public class ApplyActivity extends Activity {
         Button fill = new Button(this);
         fill.setText("🦊 Ausfüllen");
         fill.setOnClickListener(v -> runFill(true));
+        // Lange drücken: Formular-Bericht (nur Feldnamen, keine Inhalte) in die Zwischenablage
+        fill.setOnLongClickListener(v -> {
+            web.evaluateJavascript("(window.__foxDiag?window.__foxDiag():0)", x -> ui.postDelayed(() ->
+                web.evaluateJavascript("JSON.stringify(window.__foxDiagAll||[])", raw -> {
+                    try {
+                        String json = new org.json.JSONTokener(raw).nextValue().toString();
+                        android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                        cm.setPrimaryClip(android.content.ClipData.newPlainText("Fox Testpilot", "Formular-Bericht\nURL: " + web.getUrl() + "\n" + json));
+                        Toast.makeText(this, "📋 Formular-Bericht kopiert", Toast.LENGTH_LONG).show();
+                    } catch (Exception e) {
+                        Toast.makeText(this, "Bericht fehlgeschlagen", Toast.LENGTH_SHORT).show();
+                    }
+                }), 1500));
+            return true;
+        });
         if (queue != null) {
             fill.setText("Weiter ▶");
             fill.setOnClickListener(v -> {
@@ -197,23 +291,7 @@ public class ApplyActivity extends Activity {
             }
         } catch (Exception ignored) {
         }
-        // Anmelde-Skripte: jeweils nur auf der eigenen Shop-Domain, nie in fremden Rahmen
-        boolean loginScripts = false;
-        try {
-            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                for (String[] shop : Accounts.SHOPS) {
-                    String js = Accounts.loginScript(this, shop[0]);
-                    if (js.isEmpty()) continue;
-                    java.util.Set<String> origins = new java.util.HashSet<>();
-                    origins.add("https://" + shop[1]);
-                    origins.add("https://*." + shop[1]);
-                    WebViewCompat.addDocumentStartJavaScript(web, js, origins);
-                }
-                loginScripts = true;
-            }
-        } catch (Exception ignored) {
-        }
-        final boolean loginViaStart = loginScripts;
+        addLoginScripts();
         web.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String u) {

@@ -36,6 +36,19 @@ public class Accounts {
         e.apply();
     }
 
+    /** Für Sicherung/Import: nur die E-Mail einer bestimmten Person (Passwörter werden nie exportiert). */
+    static String emailOf(Context c, String personId, String shop) {
+        try {
+            return store(c).getString(pre(personId) + shop + "_email", "");
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    static void setEmailOf(Context c, String personId, String shop, String email) throws Exception {
+        store(c).edit().putString(pre(personId) + shop + "_email", email).apply();
+    }
+
     static String email(Context c, String shop) {
         try {
             return store(c).getString(pre(c) + shop + "_email", "");

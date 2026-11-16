@@ -113,6 +113,94 @@ public class PilotChecker {
     }
 
     public static void setApplied(Context c, String id, boolean on) {
+        setApplied(c, id, on, null, null);
+    }
+
+    // ---- Meine Bewerbungen: Name, Shop, Ergebnis, Bewertungs-Frist je Person ----
+
+    public static JSONObject getInfo(Context c, String personId) {
+        try {
+            return new JSONObject(prefs(c).getString("ainfo" + sfx(personId), "{}"));
+        } catch (Exception e) {
+            return new JSONObject();
+        }
+    }
+
+    static void saveInfo(Context c, String personId, JSONObject info) {
+        prefs(c).edit().putString("ainfo" + sfx(personId), info.toString()).apply();
+    }
+
+    static String personLabel(Context c, String personId) {
+        JSONArray a = persons(c);
+        for (int i = 0; i < a.length(); i++) if (personId.equals(a.optJSONObject(i).optString("id"))) return a.optJSONObject(i).optString("label");
+        return "";
+    }
+
+    /** result: "" (offen), "yes" (ausgewählt), "no" (nicht ausgewählt). due: Bewertungs-Frist als JJJJ-MM-TT oder "". */
+    public static void setResult(Context c, String aid, String result, String due) throws Exception {
+        String pid = activePerson(c);
+        JSONObject info = getInfo(c, pid);
+        JSONObject o = info.optJSONObject(aid);
+        if (o == null) o = new JSONObject();
+        o.put("result", result);
+        o.put("due", due);
+        info.put(aid, o);
+        saveInfo(c, pid, info);
+        androidx.work.WorkManager wm = androidx.work.WorkManager.getInstance(c);
+        String base = "fox-review-" + pid + "-" + aid;
+        wm.cancelUniqueWork(base + "-3");
+        wm.cancelUniqueWork(base + "-0");
+        if (!"yes".equals(result) || due == null || due.isEmpty()) return;
+        Date d = new SimpleDateFormat("yyyy-MM-dd", Locale.GERMANY).parse(due);
+        if (d == null) return;
+        long day9 = d.getTime() + 9 * 3600000L;
+        String who = persons(c).length() > 1 ? " (" + personLabel(c, pid) + ")" : "";
+        String name = o.optString("name", "Testprodukt");
+        String nice = new SimpleDateFormat("dd.MM.", Locale.GERMANY).format(d);
+        int nid = 5000 + Math.abs((pid + aid).hashCode() % 4000);
+        scheduleReminder(c, base + "-3", day9 - 3 * 86400000L, nid, "✍️ Bewertung in 3 Tagen fällig" + who, name + " – Frist " + nice, false);
+        scheduleReminder(c, base + "-0", day9, nid + 1, "⏰ Bewertung heute fällig" + who, name + " – heute ist der letzte Tag", false);
+    }
+
+    public static void removeInfo(Context c, String aid) throws Exception {
+        setResult(c, aid, "", "");
+        String pid = activePerson(c);
+        JSONObject info = getInfo(c, pid);
+        info.remove(aid);
+        saveInfo(c, pid, info);
+        setApplied(c, aid, false);
+    }
+
+    static void scheduleReminder(Context c, String unique, long at, int nid, String title, String body, boolean alarm) {
+        try {
+            long delay = at - System.currentTimeMillis();
+            if (delay <= 0) return;
+            androidx.work.Data data = new androidx.work.Data.Builder().putInt("id", nid).putString("title", title).putString("body", body).putBoolean("alarm", alarm).build();
+            androidx.work.OneTimeWorkRequest req = new androidx.work.OneTimeWorkRequest.Builder(ReminderWorker.class)
+                    .setInitialDelay(delay, java.util.concurrent.TimeUnit.MILLISECONDS).setInputData(data).build();
+            androidx.work.WorkManager.getInstance(c).enqueueUniqueWork(unique, androidx.work.ExistingWorkPolicy.REPLACE, req);
+        } catch (Exception ignored) {
+        }
+    }
+
+    public static void setApplied(Context c, String id, boolean on, String name, String shop) {
+        try {
+            String pid = activePerson(c);
+            JSONObject info = getInfo(c, pid);
+            if (on) {
+                JSONObject o = info.optJSONObject(id);
+                if (o == null) o = new JSONObject();
+                if (name != null && !name.isEmpty()) o.put("name", name);
+                if (shop != null && !shop.isEmpty()) o.put("shop", shop);
+                if (!o.has("date")) o.put("date", new SimpleDateFormat("dd.MM.yyyy", Locale.GERMANY).format(new Date()));
+                info.put(id, o);
+                saveInfo(c, pid, info);
+            } else if (info.has(id) && info.optJSONObject(id).optString("result").isEmpty()) {
+                info.remove(id);
+                saveInfo(c, pid, info);
+            }
+        } catch (Exception ignored) {
+        }
         JSONObject a = getApplied(c);
         try {
             if (on) a.put(id, new SimpleDateFormat("dd.MM.yyyy", Locale.GERMANY).format(new Date()));
@@ -223,7 +311,8 @@ public class PilotChecker {
             shops.put(checkShop(c, i, before, notify, manual));
         }
         st.put("shops", shops);
-        prefs(c).edit().putString("last", st.toString()).apply();
+        prefs(c).edit().putString("last", st.toString()).commit();
+        PilotWidget.updateAll(c);
         return st;
     }
 
@@ -425,7 +514,83 @@ public class PilotChecker {
                     .setConstraints(new androidx.work.Constraints.Builder().setRequiredNetworkType(androidx.work.NetworkType.CONNECTED).build())
                     .build();
             androidx.work.WorkManager.getInstance(c).enqueueUniqueWork("fox-start-" + key, androidx.work.ExistingWorkPolicy.REPLACE, req);
+            // Erinnerung 10 Minuten vor dem Start
+            String shop = key, page = PAGE;
+            for (String[] s : SHOPS) if (s[0].equals(key)) { shop = s[1]; page = s[2]; }
+            String at = new SimpleDateFormat("HH:mm", Locale.GERMANY).format(new Date(startAt));
+            if (startAt - System.currentTimeMillis() > 11 * 60000L) {
+                androidx.work.Data data = new androidx.work.Data.Builder().putInt("id", 700 + Math.abs(key.hashCode() % 50))
+                        .putString("title", "⏰ In 10 Minuten: " + shop + " Testpiloten")
+                        .putString("body", "Die Bewerbung startet um " + at + " Uhr.").putString("target", page).build();
+                androidx.work.OneTimeWorkRequest pre = new androidx.work.OneTimeWorkRequest.Builder(ReminderWorker.class)
+                        .setInitialDelay(startAt - System.currentTimeMillis() - 10 * 60000L, java.util.concurrent.TimeUnit.MILLISECONDS).setInputData(data).build();
+                androidx.work.WorkManager.getInstance(c).enqueueUniqueWork("fox-pre-" + key, androidx.work.ExistingWorkPolicy.REPLACE, pre);
+            }
         } catch (Exception ignored) {
+        }
+    }
+
+    /** Diagnose: was die App auf den Seiten wirklich liest – zum Kopieren und Weitergeben. */
+    public static String diagnose(Context c) {
+        StringBuilder b = new StringBuilder("Fox Testpilot Diagnose " + new SimpleDateFormat("dd.MM.yyyy HH:mm", Locale.GERMANY).format(new Date()) + "\n");
+        for (String[] shop : SHOPS) {
+            b.append("\n== ").append(shop[1]).append(" ==\n");
+            try {
+                WebLoader.Result w = WebLoader.load(c, shop[2], 40000);
+                b.append("URL: ").append(w.finalUrl).append("\n");
+                if (w.error != null) b.append("Fehler: ").append(w.error).append("\n");
+                String text = w.text == null ? "" : w.text;
+                b.append("Textlänge: ").append(text.length()).append(looksBlocked(text) ? " (sieht blockiert aus)" : "").append("\n");
+                b.append("Überschrift: ").append(headline(text)).append("\n");
+                Matcher m = PHASE.matcher(text);
+                b.append("Zeitraum: ").append(m.find() ? m.group(0).replace("\n", " ") : "nicht gefunden").append("\n");
+                String cd = "nicht gefunden";
+                for (Pattern p : COUNTDOWNS) {
+                    Matcher cm = p.matcher(text);
+                    if (cm.find()) { cd = cm.group(0).replace("\n", " "); break; }
+                }
+                long ms = countdownMs(text);
+                b.append("Countdown: ").append(cd).append(ms >= 0 ? " -> " + new SimpleDateFormat("EEE dd.MM. HH:mm", Locale.GERMANY).format(new Date(snap(System.currentTimeMillis() + ms))) : "").append("\n");
+                int test = 0;
+                for (int i = 0; i < w.items.length(); i++) if (w.items.optJSONObject(i).optBoolean("test")) test++;
+                b.append("Produkt-Links: ").append(w.items.length()).append(", davon im Testbereich: ").append(test).append("\n");
+                for (int i = 0; i < w.items.length() && i < 8; i++) {
+                    JSONObject o = w.items.optJSONObject(i);
+                    b.append(o.optBoolean("test") ? " T " : " - ").append(o.optString("name")).append(" (").append(o.optString("id")).append(")\n");
+                }
+                b.append("Wichtige Zeilen:\n");
+                int shown = 0;
+                for (String line : text.split("\n")) {
+                    String l = line.trim(), low = l.toLowerCase(Locale.GERMANY);
+                    if (l.length() < 3 || l.length() > 160) continue;
+                    if (low.contains("testpilot") || low.contains("bewerb") || low.contains("stunden") || low.contains("teilnahme") || low.contains("demnächst")) {
+                        b.append(" > ").append(l).append("\n");
+                        if (++shown >= 14) break;
+                    }
+                }
+            } catch (Exception e) {
+                b.append("Ausnahme: ").append(e).append("\n");
+            }
+        }
+        return b.toString();
+    }
+
+    static boolean isLoginUrl(String url) {
+        String u = url == null ? "" : url.toLowerCase(Locale.ROOT);
+        return u.contains("login") || u.contains("/auth") || u.contains("signin") || u.contains("anmeld");
+    }
+
+    /** Ist die gewählte Person im App-Browser angemeldet? 1 = ja, 0 = nein, -1 = unklar. */
+    public static int loginState(Context c, String domain) {
+        try {
+            WebLoader.Result w = WebLoader.load(c, "https://www." + domain + "/de/myaccount", 25000, 9000);
+            if (w.error != null || looksBlocked(w.text)) return -1;
+            String t = w.text.toLowerCase(Locale.GERMANY);
+            if (isLoginUrl(w.finalUrl)) return 0;
+            if (t.contains("passwort") && (t.contains("anmelden") || t.contains("einloggen")) && !t.contains("abmelden")) return 0;
+            return 1;
+        } catch (Exception e) {
+            return -1;
         }
     }
 
@@ -455,8 +620,17 @@ public class PilotChecker {
     }
 
     /** alarm = lauter Alarmton. target = Link, der beim Tippen geöffnet wird (Kiwi, sonst Browser). */
+    /** Nachtruhe: Meldungen kommen dann lautlos (außer dem Start-Alarm und der 10-Minuten-Erinnerung). */
+    static boolean inQuiet(Context c) {
+        if (!prefs(c).getBoolean("quiet", false)) return false;
+        int from = prefs(c).getInt("quietFrom", 22), to = prefs(c).getInt("quietTo", 7);
+        int h = Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
+        return from == to ? false : from < to ? (h >= from && h < to) : (h >= from || h < to);
+    }
+
     public static boolean showNotification(Context c, int id, String title, String body, boolean alarm, String target) {
         if (!notificationsAllowed(c)) return false;
+        boolean quiet = !alarm && !(id >= 700 && id < 750) && inQuiet(c);
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
             NotificationChannel ch = new NotificationChannel(CHANNEL, "Testpiloten-Meldungen", NotificationManager.IMPORTANCE_HIGH);
@@ -470,6 +644,9 @@ public class PilotChecker {
                     new android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_ALARM)
                             .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION).build());
             nm.createNotificationChannel(al);
+            NotificationChannel q = new NotificationChannel("testpilot_leise", "Meldungen in der Nachtruhe", NotificationManager.IMPORTANCE_LOW);
+            q.setDescription("Lautlos, während die Nachtruhe gilt");
+            nm.createNotificationChannel(q);
         }
         Intent open;
         if (target != null && !target.isEmpty()) {
@@ -483,12 +660,12 @@ public class PilotChecker {
             open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             pi = PendingIntent.getActivity(c, id, open, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         }
-        NotificationCompat.Builder b = new NotificationCompat.Builder(c, alarm ? CHANNEL_ALARM : CHANNEL)
+        NotificationCompat.Builder b = new NotificationCompat.Builder(c, alarm ? CHANNEL_ALARM : quiet ? "testpilot_leise" : CHANNEL)
                 .setSmallIcon(c.getApplicationInfo().icon)
                 .setContentTitle(title)
                 .setContentText(body)
                 .setStyle(new NotificationCompat.BigTextStyle().bigText(body))
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setPriority(quiet ? NotificationCompat.PRIORITY_LOW : NotificationCompat.PRIORITY_HIGH)
                 .setCategory(alarm ? NotificationCompat.CATEGORY_ALARM : NotificationCompat.CATEGORY_MESSAGE)
                 .setAutoCancel(true);
         if (pi != null) b.setContentIntent(pi);

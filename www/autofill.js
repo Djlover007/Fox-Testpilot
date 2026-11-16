@@ -220,6 +220,29 @@
     });
   }
 
+  // Formular-Bericht für die Fehlersuche: nur Feld-Beschreibungen, keine eingegebenen Inhalte
+  function diagFields() {
+    return [].slice.call(document.querySelectorAll("input,select,textarea,button")).filter(function (e) { return low(e.type) !== "hidden"; }).slice(0, 60).map(function (e) {
+      var tag = e.tagName.toLowerCase();
+      return tag + (e.type ? ":" + e.type : "") + " | " + (tag === "button" ? low(e.textContent).trim().slice(0, 40) : keyOf(e).trim().slice(0, 70)) +
+        (tag === "button" ? "" : " => " + (tag === "textarea" ? "text" : fieldOf(e) || "-")) + (e.required ? " *" : "") + (visible(e) ? "" : " (unsichtbar)");
+    });
+  }
+  function diagSend() {
+    var rep = { frame: location.host + location.pathname.slice(0, 60), top: TOP, fields: diagFields() };
+    if (TOP) window.__foxDiagAll.push(rep);
+    else { try { window.top.postMessage({ foxDiag: rep }, "*"); } catch (x) {} }
+    [].slice.call(document.querySelectorAll("iframe")).forEach(function (f) {
+      try { f.contentWindow.postMessage("fox-diag", "*"); } catch (x) {}
+    });
+  }
+  if (TOP) {
+    window.__foxDiagAll = [];
+    window.__foxDiag = function () { window.__foxDiagAll = []; diagSend(); return 1; };
+    window.addEventListener("message", function (ev) { if (ev.data && ev.data.foxDiag) window.__foxDiagAll.push(ev.data.foxDiag); });
+  }
+  window.addEventListener("message", function (ev) { if (ev.data === "fox-diag" && !TOP) diagSend(); });
+
   window.__foxFill = function () { try { fill(); } catch (x) {} relay(); return count; };
   window.addEventListener("message", function (ev) { if (ev.data === "fox-fill") window.__foxFill(); });
 

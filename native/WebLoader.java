@@ -78,6 +78,12 @@ public class WebLoader {
 
     @SuppressLint("SetJavaScriptEnabled")
     public static Result load(Context ctx, String url, long timeoutMs) {
+        return load(ctx, url, timeoutMs, 0);
+    }
+
+    /** quickMs > 0: nicht auf Testpiloten-Inhalt warten, sondern nach dieser Zeit fertig (z. B. Anmelde-Prüfung). */
+    @SuppressLint("SetJavaScriptEnabled")
+    public static Result load(Context ctx, String url, long timeoutMs, long quickMs) {
         final Result res = new Result();
         final CountDownLatch done = new CountDownLatch(1);
         final Handler main = new Handler(Looper.getMainLooper());
@@ -118,7 +124,7 @@ public class WebLoader {
                         else bottomHits[0] = 0;
                         long elapsed = System.currentTimeMillis() - start;
                         // Fertig: Seite geladen, ganz unten angekommen (2x hintereinander, damit Nachgeladenes da ist)
-                        boolean ready = (elapsed > 7000 && looksReady(res.text) && bottomHits[0] >= 2) || elapsed > timeoutMs;
+                        boolean ready = (quickMs > 0 ? elapsed > quickMs : elapsed > 7000 && looksReady(res.text) && bottomHits[0] >= 2) || elapsed > timeoutMs;
                         if (ready) done.countDown();
                         else main.postDelayed(poll[0], 1500);
                     });
