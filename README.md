@@ -9,7 +9,7 @@ Behält die Testpiloten von [MediaMarkt](https://www.mediamarkt.de/de/campaign/t
 
 In der App siehst du alle Testprodukte und hakst ab, wofür du dich schon beworben hast.
 
-**Automatisch ausfüllen:** Unter ⚙️ einmal Adresse und Bewerbungstext speichern (`{produkt}` wird durch den Produktnamen ersetzt) und im App-Browser bei myMediaMarkt und mySaturn anmelden. „Bewerben“ öffnet das Produkt im App-Browser, das Teilnahmeformular wird mit deinen Daten gefüllt (`www/autofill.js`, auch in eingebetteten Formularen). Häkchen setzen und Absenden machst du selbst.
+**Automatisch ausfüllen:** Unter ⚙️ einmal Adresse und Bewerbungstext speichern (`{produkt}` wird durch den Produktnamen ersetzt) sowie E-Mail und Passwort für myMediaMarkt und mySaturn (verschlüsselt auf dem Gerät, Android Keystore) – die App meldet dich im App-Browser automatisch an. „Bewerben“ öffnet das Produkt im App-Browser, das Teilnahmeformular wird mit deinen Daten gefüllt (`www/autofill.js`, auch in eingebetteten Formularen). Häkchen setzen und Absenden machst du selbst.
 
 - Prüft im Hintergrund alle 15 Min. bis 3 Std. (einstellbar, Android WorkManager)
 - Tipp: In den Android-Einstellungen für Fox Testpilot „Akku: Nicht eingeschränkt“ wählen

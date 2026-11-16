@@ -205,6 +205,32 @@ public class FoxToolsPlugin extends Plugin {
         call.resolve();
     }
 
+    @PluginMethod
+    public void getAccounts(PluginCall call) {
+        try {
+            call.resolve(JSObject.fromJSONObject(Accounts.overview(getContext())));
+        } catch (Exception e) {
+            call.reject("Konten konnten nicht gelesen werden: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void setAccount(PluginCall call) {
+        try {
+            String shop = call.getString("shop", "");
+            if (!shop.equals("mm") && !shop.equals("saturn")) {
+                call.reject("Unbekannter Shop");
+                return;
+            }
+            String email = call.getString("email", "").trim();
+            String pw = call.getString("password", "");
+            Accounts.save(getContext(), shop, email, pw, email.isEmpty() && pw.isEmpty());
+            call.resolve(JSObject.fromJSONObject(Accounts.overview(getContext())));
+        } catch (Exception e) {
+            call.reject("Speichern fehlgeschlagen: " + e.getMessage());
+        }
+    }
+
     /** Lädt die neue APK herunter und öffnet den Android-Installationsdialog. */
     @PluginMethod
     public void installUpdate(PluginCall call) {

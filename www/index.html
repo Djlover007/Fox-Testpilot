@@ -71,7 +71,7 @@ h2 span{text-transform:none;letter-spacing:0}
 .form h3{font-size:16px;margin-bottom:4px}.form p{font-size:13px;color:var(--muted);line-height:1.45}
 .form input,.form select,.form textarea{width:100%;border:0;border-radius:12px;padding:12px;font-size:15px;background:var(--chip);color:var(--text);margin-top:8px;outline:none;font-family:inherit}
 .form textarea{min-height:120px;resize:vertical}
-.form .two{display:flex;gap:8px}.form .two>*{flex:1;min-width:0}.form .two>.s{flex:0 0 32%}
+.form .two{display:flex;gap:8px}.form .two>*{flex:1;min-width:0}.form .two>.s{flex:0 0 32%}.form .two .btn{margin-top:8px}
 .shop{display:flex;align-items:center;gap:10px;background:var(--card);border-radius:14px;padding:10px 14px;margin-bottom:8px;font-size:14px}
 .shop span{flex:1}.shop .pg{border:0;background:var(--chip);color:var(--text);border-radius:10px;padding:7px 10px;font-size:13px;font-weight:600}
 </style>
@@ -102,7 +102,7 @@ h2 span{text-transform:none;letter-spacing:0}
   <div id="list"></div>
 
   <div class="tip">
-    <b>So bewirbst du dich:</b> Einmal unter ⚙️ deine Daten und deinen Bewerbungstext speichern und dich bei myMediaMarkt bzw. mySaturn anmelden. Dann bei einem Produkt auf „Bewerben“ tippen und zum Teilnahmeformular gehen – Fox Testpilot füllt es aus. Du prüfst kurz, setzt die Häkchen und schickst selbst ab. Danach hier „Beworben“ abhaken.
+    <b>So bewirbst du dich:</b> Einmal unter ⚙️ deine Daten, deinen Bewerbungstext und deine Konten (E-Mail + Passwort für myMediaMarkt und mySaturn) speichern. Dann bei einem Produkt auf „Bewerben“ tippen und zum Teilnahmeformular gehen – Fox Testpilot füllt es aus. Du prüfst kurz, setzt die Häkchen und schickst selbst ab. Danach hier „Beworben“ abhaken.
   </div>
 </div>
 
@@ -119,14 +119,28 @@ h2 span{text-transform:none;letter-spacing:0}
     <div class="two"><input id="p_first" placeholder="Vorname" autocomplete="given-name"><input id="p_last" placeholder="Nachname" autocomplete="family-name"></div>
     <div class="two"><input id="p_street" placeholder="Straße" autocomplete="address-line1"><input id="p_nr" class="s" placeholder="Nr."></div>
     <div class="two"><input id="p_zip" class="s" placeholder="PLZ" inputmode="numeric" autocomplete="postal-code"><input id="p_city" placeholder="Ort" autocomplete="address-level2"></div>
-    <input id="p_email" type="email" placeholder="E-Mail (wie bei myMediaMarkt / mySaturn)" autocomplete="email">
+    <input id="p_email" type="email" placeholder="E-Mail (falls kein Konto unten gespeichert)" autocomplete="email">
     <input id="p_phone" type="tel" placeholder="Telefon (optional)" autocomplete="tel">
     <input id="p_birth" placeholder="Geburtsdatum TT.MM.JJJJ (optional)" inputmode="numeric">
     <textarea id="p_text" placeholder="Dein Bewerbungstext. {produkt} wird durch den Produktnamen ersetzt."></textarea>
     <p>Tipp: Schreib in eigenen Worten, warum du gut testen kannst. <b>{produkt}</b> wird automatisch durch den Produktnamen ersetzt.</p>
     <button class="btn" id="psave">Speichern</button>
-    <button class="btn light" id="plogin">🔑 Bei myMediaMarkt anmelden</button>
-    <button class="btn light" id="plogin2">🔑 Bei mySaturn anmelden</button>
+  </div>
+  <div class="form">
+    <h3>🔑 Konten</h3>
+    <p>E-Mail und Passwort für jeden Shop. Die App meldet dich damit im App-Browser automatisch an. Gespeichert wird verschlüsselt nur auf diesem Handy.</p>
+    <div data-acc="mm" data-url="https://www.mediamarkt.de/de/myaccount">
+      <p style="margin-top:12px"><b>myMediaMarkt</b> <span class="accst"></span></p>
+      <input class="aem" type="email" placeholder="E-Mail" autocomplete="off">
+      <input class="apw" type="password" placeholder="Passwort" autocomplete="new-password">
+      <div class="two"><button class="btn asave">Speichern</button><button class="btn light alogin">Anmelden</button></div>
+    </div>
+    <div data-acc="saturn" data-url="https://www.saturn.de/de/myaccount">
+      <p style="margin-top:16px"><b>mySaturn</b> <span class="accst"></span></p>
+      <input class="aem" type="email" placeholder="E-Mail" autocomplete="off">
+      <input class="apw" type="password" placeholder="Passwort" autocomplete="new-password">
+      <div class="two"><button class="btn asave">Speichern</button><button class="btn light alogin">Anmelden</button></div>
+    </div>
   </div>
   <button class="btn light" id="test">🔔 Test-Benachrichtigung senden</button>
   <details class="hist"><summary>📜 Verlauf</summary><div id="hist"></div></details>
@@ -278,8 +292,27 @@ $("psave").onclick = function () {
     setTimeout(function () { $("psave").textContent = "Speichern"; }, 2500);
   }).catch(function (e) { alertErr(e.message); });
 };
-$("plogin").onclick = function () { openLink("https://www.mediamarkt.de/de/myaccount"); };
-$("plogin2").onclick = function () { openLink("https://www.saturn.de/de/myaccount"); };
+function showAccounts(a) {
+  document.querySelectorAll("[data-acc]").forEach(function (box) {
+    var x = (a || {})[box.dataset.acc] || {};
+    box.querySelector(".aem").value = x.email || "";
+    box.querySelector(".apw").value = "";
+    box.querySelector(".apw").placeholder = x.hasPassword ? "Passwort (gespeichert – leer lassen zum Behalten)" : "Passwort";
+    box.querySelector(".accst").textContent = x.email && x.hasPassword ? "✅" : "";
+  });
+}
+function loadAccounts() { call("getAccounts", {}, 15000).then(showAccounts).catch(function () {}); }
+document.querySelectorAll("[data-acc]").forEach(function (box) {
+  var save = box.querySelector(".asave");
+  save.onclick = function () {
+    call("setAccount", { shop: box.dataset.acc, email: box.querySelector(".aem").value.trim(), password: box.querySelector(".apw").value }, 15000).then(function (a) {
+      showAccounts(a);
+      save.textContent = "✅ Gespeichert";
+      setTimeout(function () { save.textContent = "Speichern"; }, 2500);
+    }).catch(function (e) { alertErr(e.message); });
+  };
+  box.querySelector(".alogin").onclick = function () { openLink(box.dataset.url); };
+});
 
 $("check").onclick = check;
 $("openpage").onclick = function () { openLink(heroUrl); };
@@ -341,6 +374,7 @@ $("updlink").onclick = function (ev) { ev.preventDefault(); installUpdate(); };
 
 checkUpdate();
 loadProfile();
+loadAccounts();
 load().then(function () {
   if (NATIVE && $("perm").hidden === false) call("askNotifications").then(function (r) { $("perm").hidden = !!r.granted; }).catch(function () {});
   if (NATIVE && (!state.last || Date.now() - state.last.time > 10 * 60000)) check();
