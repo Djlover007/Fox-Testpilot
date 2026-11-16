@@ -14,6 +14,8 @@ In der App siehst du alle Testprodukte und hakst ab, wofür du dich schon beworb
 - Prüft im Hintergrund alle 15 Min. bis 3 Std. (einstellbar, Android WorkManager)
 - Tipp: In den Android-Einstellungen für Fox Testpilot „Akku: Nicht eingeschränkt“ wählen
 
+**Mehrere Personen im Haushalt:** Mit ＋ bekommt jede Person ein eigenes Profil (eigene Daten, eigene Konten, eigene „Beworben“-Liste). Beim Wechsel wird der App-Browser abgemeldet.
+
 ## APK und Updates
 Bei jedem Upload auf `main` baut GitHub Actions die App und veröffentlicht sie als **Release**.
 

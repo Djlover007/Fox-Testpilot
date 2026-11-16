@@ -41,7 +41,7 @@ public class ApplyActivity extends Activity {
     /** Baut das Ausfüll-Skript: gespeicherte Daten + www/autofill.js. */
     static String buildScript(android.content.Context c, String product, String url) {
         try {
-            JSONObject p = new JSONObject(PilotChecker.prefs(c).getString("profile", "{}"));
+            JSONObject p = new JSONObject(PilotChecker.prefs(c).getString(PilotChecker.profileKey(c), "{}"));
             String name = product == null || product.trim().isEmpty() ? "das Testprodukt" : product.trim();
             p.put("text", p.optString("text").replace("{produkt}", name));
             // Im Formular die E-Mail des Kontos verwenden, mit dem man bei diesem Shop angemeldet ist

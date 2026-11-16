@@ -68,9 +68,45 @@ public class PilotChecker {
         }
     }
 
-    public static JSONObject getApplied(Context c) {
+    // ---- Personen im Haushalt: jede mit eigenen Daten, eigenen Konten und eigener Bewerbungsliste ----
+
+    public static JSONArray persons(Context c) {
         try {
-            return new JSONObject(prefs(c).getString("applied", "{}"));
+            JSONArray a = new JSONArray(prefs(c).getString("persons", "[]"));
+            if (a.length() > 0) return a;
+        } catch (Exception ignored) {
+        }
+        JSONArray a = new JSONArray();
+        try {
+            a.put(new JSONObject().put("id", "p1").put("label", "Ich"));
+        } catch (Exception ignored) {
+        }
+        return a;
+    }
+
+    public static String activePerson(Context c) {
+        String id = prefs(c).getString("activePerson", "p1");
+        JSONArray a = persons(c);
+        for (int i = 0; i < a.length(); i++) if (id.equals(a.optJSONObject(i).optString("id"))) return id;
+        return a.optJSONObject(0).optString("id");
+    }
+
+    /** Die erste Person behält die bisherigen Speicher-Namen. */
+    static String sfx(String personId) {
+        return "p1".equals(personId) ? "" : "_" + personId;
+    }
+
+    public static String profileKey(Context c) {
+        return "profile" + sfx(activePerson(c));
+    }
+
+    public static JSONObject getApplied(Context c) {
+        return getApplied(c, activePerson(c));
+    }
+
+    public static JSONObject getApplied(Context c, String personId) {
+        try {
+            return new JSONObject(prefs(c).getString("applied" + sfx(personId), "{}"));
         } catch (Exception e) {
             return new JSONObject();
         }
@@ -83,7 +119,7 @@ public class PilotChecker {
             else a.remove(id);
         } catch (Exception ignored) {
         }
-        prefs(c).edit().putString("applied", a.toString()).apply();
+        prefs(c).edit().putString("applied" + sfx(activePerson(c)), a.toString()).apply();
     }
 
     static int ymd(int d, int m, int y) {

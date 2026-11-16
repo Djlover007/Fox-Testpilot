@@ -21,9 +21,24 @@ public class Accounts {
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM);
     }
 
+    /** Schlüssel-Vorsatz der gerade gewählten Person (erste Person: keiner). */
+    static String pre(Context c) {
+        return pre(PilotChecker.activePerson(c));
+    }
+
+    static String pre(String personId) {
+        return "p1".equals(personId) ? "" : personId + "_";
+    }
+
+    static void clearPerson(Context c, String personId) throws Exception {
+        SharedPreferences.Editor e = store(c).edit();
+        for (String[] s : SHOPS) e.remove(pre(personId) + s[0] + "_email").remove(pre(personId) + s[0] + "_pw");
+        e.apply();
+    }
+
     static String email(Context c, String shop) {
         try {
-            return store(c).getString(shop + "_email", "");
+            return store(c).getString(pre(c) + shop + "_email", "");
         } catch (Exception e) {
             return "";
         }
@@ -31,7 +46,7 @@ public class Accounts {
 
     static String password(Context c, String shop) {
         try {
-            return store(c).getString(shop + "_pw", "");
+            return store(c).getString(pre(c) + shop + "_pw", "");
         } catch (Exception e) {
             return "";
         }
@@ -40,6 +55,7 @@ public class Accounts {
     /** Leeres Passwort = bisheriges behalten. E-Mail und Passwort leer = Konto löschen. */
     static void save(Context c, String shop, String email, String password, boolean clear) throws Exception {
         SharedPreferences.Editor e = store(c).edit();
+        shop = pre(c) + shop;
         if (clear) {
             e.remove(shop + "_email").remove(shop + "_pw");
         } else {

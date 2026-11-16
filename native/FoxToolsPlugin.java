@@ -68,6 +68,15 @@ public class FoxToolsPlugin extends Plugin {
             JSONObject last = PilotChecker.getLast(getContext());
             if (last != null) r.put("last", JSObject.fromJSONObject(last));
             r.put("applied", JSObject.fromJSONObject(PilotChecker.getApplied(getContext())));
+            org.json.JSONArray persons = PilotChecker.persons(getContext());
+            JSObject all = new JSObject();
+            for (int i = 0; i < persons.length(); i++) {
+                String pid = persons.getJSONObject(i).optString("id");
+                all.put(pid, JSObject.fromJSONObject(PilotChecker.getApplied(getContext(), pid)));
+            }
+            r.put("persons", new JSArray(persons.toString()));
+            r.put("active", PilotChecker.activePerson(getContext()));
+            r.put("appliedAll", all);
             r.put("notifications", PilotChecker.notificationsAllowed(getContext()));
             r.put("background", PilotChecker.backgroundOn(getContext()));
             r.put("interval", PilotChecker.intervalMinutes(getContext()));
@@ -192,7 +201,7 @@ public class FoxToolsPlugin extends Plugin {
     @PluginMethod
     public void getProfile(PluginCall call) {
         try {
-            call.resolve(JSObject.fromJSONObject(new JSONObject(PilotChecker.prefs(getContext()).getString("profile", "{}"))));
+            call.resolve(JSObject.fromJSONObject(new JSONObject(PilotChecker.prefs(getContext()).getString(PilotChecker.profileKey(getContext()), "{}"))));
         } catch (Exception e) {
             call.resolve(new JSObject());
         }
@@ -201,8 +210,88 @@ public class FoxToolsPlugin extends Plugin {
     @PluginMethod
     public void setProfile(PluginCall call) {
         JSObject p = call.getObject("profile", new JSObject());
-        PilotChecker.prefs(getContext()).edit().putString("profile", p.toString()).apply();
+        PilotChecker.prefs(getContext()).edit().putString(PilotChecker.profileKey(getContext()), p.toString()).apply();
         call.resolve();
+    }
+
+    /** Beim Personenwechsel abmelden: Cookies und Seitendaten des App-Browsers löschen. */
+    private void logoutBrowser() {
+        try {
+            android.webkit.CookieManager.getInstance().removeAllCookies(null);
+            android.webkit.CookieManager.getInstance().flush();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void savePersons(org.json.JSONArray a, String active) {
+        PilotChecker.prefs(getContext()).edit().putString("persons", a.toString()).putString("activePerson", active).commit();
+    }
+
+    @PluginMethod
+    public void addPerson(PluginCall call) {
+        try {
+            org.json.JSONArray a = PilotChecker.persons(getContext());
+            if (a.length() >= 6) {
+                call.reject("Höchstens 6 Personen");
+                return;
+            }
+            String id = "p" + System.currentTimeMillis();
+            String label = call.getString("label", "").trim();
+            a.put(new JSONObject().put("id", id).put("label", label.isEmpty() ? "Person " + (a.length() + 1) : label));
+            savePersons(a, id);
+            logoutBrowser();
+            getState(call);
+        } catch (Exception e) {
+            call.reject(e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void selectPerson(PluginCall call) {
+        String id = call.getString("id", "p1");
+        if (!id.equals(PilotChecker.activePerson(getContext()))) {
+            savePersons(PilotChecker.persons(getContext()), id);
+            logoutBrowser();
+        }
+        getState(call);
+    }
+
+    @PluginMethod
+    public void renamePerson(PluginCall call) {
+        try {
+            String label = call.getString("label", "").trim();
+            org.json.JSONArray a = PilotChecker.persons(getContext());
+            String active = PilotChecker.activePerson(getContext());
+            for (int i = 0; i < a.length(); i++) {
+                if (active.equals(a.getJSONObject(i).optString("id")) && !label.isEmpty()) a.getJSONObject(i).put("label", label);
+            }
+            savePersons(a, active);
+            getState(call);
+        } catch (Exception e) {
+            call.reject(e.getMessage());
+        }
+    }
+
+    /** Löscht die gewählte Person samt Daten, Konten und Bewerbungsliste (die letzte bleibt). */
+    @PluginMethod
+    public void deletePerson(PluginCall call) {
+        try {
+            org.json.JSONArray a = PilotChecker.persons(getContext());
+            if (a.length() < 2) {
+                call.reject("Die letzte Person kann nicht gelöscht werden");
+                return;
+            }
+            String active = PilotChecker.activePerson(getContext());
+            org.json.JSONArray rest = new org.json.JSONArray();
+            for (int i = 0; i < a.length(); i++) if (!active.equals(a.getJSONObject(i).optString("id"))) rest.put(a.getJSONObject(i));
+            Accounts.clearPerson(getContext(), active);
+            PilotChecker.prefs(getContext()).edit().remove("profile" + PilotChecker.sfx(active)).remove("applied" + PilotChecker.sfx(active)).commit();
+            savePersons(rest, rest.getJSONObject(0).optString("id"));
+            logoutBrowser();
+            getState(call);
+        } catch (Exception e) {
+            call.reject(e.getMessage());
+        }
     }
 
     @PluginMethod
