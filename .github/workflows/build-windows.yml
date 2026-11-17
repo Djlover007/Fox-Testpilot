@@ -1,0 +1,50 @@
+name: Windows-EXE bauen und veröffentlichen
+
+on:
+  push:
+    branches: [main, master]
+    paths: ["windows/**", "www/autofill.js", ".github/workflows/build-windows.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Abhängigkeiten installieren
+        run: pip install -r windows/requirements.txt pyinstaller
+
+      - name: Build-Nummer und Ausfüll-Skript eintragen
+        shell: bash
+        run: |
+          echo "BUILD = ${{ github.run_number }}" > windows/version.py
+          cp www/autofill.js windows/autofill.js
+
+      - name: Kurztest (Logik)
+        working-directory: windows
+        run: python -c "import engine; t='61 Tage : 23 Stunden : 18 Minuten'; assert engine.countdown_ms(t) > 0; print(engine.name_from_url('https://www.mediamarkt.de/de/product/_bosch-bcrdw3bx-saugroboter-3006992.html'))"
+
+      - name: EXE bauen
+        working-directory: windows
+        run: pyinstaller --onefile --noconsole --name FoxTestpilot --icon fox.ico --add-data "poll.js;." --add-data "login.js;." --add-data "autofill.js;." --add-data "fox.ico;." --collect-all playwright --collect-all winotify --hidden-import pystray._win32 foxtestpilot.py
+
+      - name: Release veröffentlichen
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: win-v${{ github.run_number }}
+          name: Fox Testpilot Windows ${{ github.run_number }}
+          prerelease: true
+          files: windows/dist/FoxTestpilot.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FoxTestpilot-Windows
+          path: windows/dist/FoxTestpilot.exe

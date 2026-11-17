@@ -1,2 +1,8 @@
 node_modules/
 android/
+__pycache__/
+windows/version.py
+windows/autofill.js
+windows/build/
+windows/dist/
+*.spec

@@ -24,6 +24,14 @@ In der App siehst du alle Testprodukte und hakst ab, wofür du dich schon beworb
 
 **Discord:** Unter Einstellungen → Discord eine Webhook-Adresse einfügen; alle Meldungen kommen dann zusätzlich in den Kanal (auf Wunsch mit @everyone beim Start). Die Adresse bleibt nur auf dem Handy.
 
+## Windows-Version
+`windows/` – Python-Programm (Playwright mit Edge/Chrome, Fenster mit tkinter), als `FoxTestpilot.exe` per GitHub Actions gebaut.
+Überwachung, Windows- und Discord-Meldungen, Personen mit eigenem Browser-Profil, Ausfüll-Hilfe, Auto-Modus mit Probelauf, eigene Seiten.
+Die Sicherung aus der Android-App lässt sich einspielen (ohne Passwörter).
+
+- Neueste EXE: unter Releases die neueste „Fox Testpilot Windows …“
+- Läuft nach dem Schließen unten rechts neben der Uhr weiter; das Programm meldet neue Versionen selbst.
+
 ## APK und Updates
 Bei jedem Upload auf `main` baut GitHub Actions die App und veröffentlicht sie als **Release**.
 
