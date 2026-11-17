@@ -272,11 +272,14 @@ public class PilotChecker {
         return "";
     }
 
-    /** Hat der Link nur ein Bild, steht im Namen die Bildbeschreibung – dann lieber den Namen aus der Adresse nehmen. */
+    /**
+     * Produktname: aus der Adresse (/product/_marke-modell-123.html) – die ist bei MediaMarkt/Saturn zuverlässig.
+     * Der Text am Link ist oft nur eine Bildbeschreibung („Schwarzer Saugroboter mit …“).
+     */
     static void fixName(JSONObject o) {
         try {
             String fromUrl = productNameFromUrl(o.optString("url"));
-            if (o.optString("name").isEmpty() || (o.optBoolean("alt") && fromUrl.length() > 3)) o.put("name", fromUrl);
+            if (fromUrl.contains(" ") || o.optString("name").isEmpty()) o.put("name", fromUrl);
         } catch (Exception ignored) {
         }
     }
@@ -571,7 +574,9 @@ public class PilotChecker {
                 for (int i = 0; i < w.items.length() && i < 8; i++) {
                     JSONObject o = w.items.optJSONObject(i);
                     fixName(o);
-                    b.append(o.optBoolean("test") ? " T " : " - ").append(o.optString("name")).append(" (").append(o.optString("id")).append(")\n");
+                    String u = o.optString("url");
+                    b.append(o.optBoolean("test") ? " T " : " - ").append(o.optString("name")).append(" (").append(o.optString("id")).append(")\n")
+                            .append("     ").append(u.replaceAll("^https://www\\.[a-z]+\\.de", "")).append("\n");
                 }
                 b.append("Wichtige Zeilen:\n");
                 int shown = 0;
