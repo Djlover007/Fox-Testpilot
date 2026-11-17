@@ -5,7 +5,9 @@
   if (window.__foxFillInit) return;
   window.__foxFillInit = true;
   var D = window.__foxData || {};
-  var count = 0, foundForm = false, sending = false, tries = 0;
+  var count = 0, foundForm = false, sending = false, tries = 0, filled = [];
+  var FL = { email: "E-Mail", first: "Vorname", last: "Nachname", name: "Name", streetfull: "Straße + Nr.", street: "Straße", nr: "Hausnummer",
+    zip: "PLZ", city: "Ort", phone: "Telefon", birth: "Geburtsdatum", text: "Bewerbungstext" };
   var TOP = window.top === window;
 
   // Auto-Modus: Stand an die oberste Seite melden (das Formular kann in einem eingebetteten Rahmen stecken)
@@ -15,7 +17,15 @@
   }
   if (TOP) window.addEventListener("message", function (ev) {
     if (ev.data === "fox-submitted" || ev.data === "fox-success") tell(String(ev.data).slice(4));
+    if (ev.data && ev.data.foxProbe) { window.__foxProbe = ev.data.foxProbe; tell("probe"); }
   });
+  /** Probelauf: nicht abschicken, sondern berichten, was passiert wäre. */
+  function probeReport(b, checks) {
+    var rep = { frame: location.host + location.pathname.slice(0, 50), filled: filled, checks: checks, button: b ? String(b.textContent || b.value || "").replace(/\s+/g, " ").trim().slice(0, 60) || "(ohne Text)" : "" };
+    if (b) { try { b.style.outline = "4px solid #e53935"; b.style.outlineOffset = "2px"; b.scrollIntoView({ block: "center" }); } catch (x) {} }
+    if (TOP) { window.__foxProbe = rep; tell("probe"); }
+    else { try { window.top.postMessage({ foxProbe: rep }, "*"); } catch (x) {} }
+  }
 
   /** Nur im Auto-Modus: Pflicht-Häkchen setzen und das Formular absenden – genau einmal je Produkt. */
   function autoSend(g, root) {
@@ -25,16 +35,21 @@
     try { if (sessionStorage.getItem("foxSent" + D.aid)) return; } catch (x) {}
     sending = true; tries++;
     setTimeout(function () {
+      var checks = [];
       [].slice.call(root.querySelectorAll("input[type=checkbox]")).forEach(function (c) {
         if (c.checked || c.disabled) return;
         var k = keyOf(c);
         if (/newsletter|werb|marketing|angebot/.test(k)) return;          // keine Werbe-Einwilligung
-        if (c.required || /teilnahme|datenschutz|einverstanden|akzeptier|bestätig|agb|bedingung/.test(k)) c.click();
+        if (c.required || /teilnahme|datenschutz|einverstanden|akzeptier|bestätig|agb|bedingung/.test(k)) { c.click(); checks.push(k.trim().slice(0, 80)); }
       });
       setTimeout(function () {
         var btns = [].slice.call(root.querySelectorAll("button,input[type=submit],[role=button]")).filter(visible);
         var b = btns.filter(function (x) { return /bewerb|teilnehm|absenden|abschicken|senden|mitmachen/.test(low(x.textContent || x.value)); })[0] ||
           (root !== document ? btns.filter(function (x) { return low(x.type) === "submit"; })[0] : null);
+        if (D.probe) {
+          if (b || tries >= 3) probeReport(b, checks); else sending = false;
+          return;
+        }
         if (!b || b.disabled) { sending = false; return; }
         try { sessionStorage.setItem("foxSent" + D.aid, "1"); } catch (x) {}
         b.click();
@@ -123,7 +138,8 @@
     return "";
   }
 
-  function setVal(e, v) {
+  function setVal(e, v, f) {
+    filled.push([FL[f] || f || "Feld", String(v).length > 60 ? String(v).slice(0, 57) + "…" : String(v)]);
     var proto = e.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     var d = Object.getOwnPropertyDescriptor(proto, "value");
     if (d && d.set) d.set.call(e, v); else e.value = v;
@@ -162,7 +178,7 @@
       g.items.forEach(function (x) {
         if (x.e.value) return;
         var v = x.f === "text" ? D.text : valueFor(x.f, x.e, hasNr);
-        if (v) setVal(x.e, String(v));
+        if (v) setVal(x.e, String(v), x.f);
       });
       foundForm = true;
       autoSend(g, roots[groups.indexOf(g)]);

@@ -75,6 +75,10 @@ public class ApplyActivity extends Activity {
     private void loadStep() {
         if (isFinishing()) return;
         if (qi >= queue.length()) {
+            if (probeMode) {
+                showProbeReport();
+                return;
+            }
             Toast.makeText(this, "🤖 Fertig: " + sentCount + " von " + total + " Bewerbungen abgeschickt", Toast.LENGTH_LONG).show();
             finish();
             return;
@@ -96,7 +100,7 @@ public class ApplyActivity extends Activity {
             return;
         }
         boolean login = it.optBoolean("login");
-        script = login ? "" : buildScript(this, it.optString("name"), it.optString("url"), it.optString("aid"));
+        script = login ? "" : buildScript(this, it.optString("name"), it.optString("url"), it.optString("aid"), it.optBoolean("probe"));
         try {
             if (handler != null) handler.remove();
             handler = null;
@@ -116,6 +120,91 @@ public class ApplyActivity extends Activity {
         String who = it.optString("label");
         titleView.setText((login ? "🔑 " : "🤖 ") + (qi + 1) + "/" + queue.length() + " " + (who.isEmpty() ? "" : who + ": ") + it.optString("name"));
         web.loadUrl(it.optString("url"));
+    }
+
+    // ---- Probelauf: ausfüllen, aber nicht abschicken, und am Ende zeigen, was passiert wäre ----
+    private boolean probeMode = false;
+    private final StringBuilder probeText = new StringBuilder();
+    private int probeOk = 0;
+
+    private void probeFinished(boolean found) {
+        if (stepDone) return;
+        stepDone = true;
+        JSONObject it = queue.optJSONObject(qi);
+        String who = it.optString("label");
+        probeText.append("\n━━ ").append(who.isEmpty() ? "" : who + ": ").append(it.optString("name")).append(" ━━\n");
+        if (!found) {
+            probeText.append("❌ Kein Bewerbungsformular erkannt (nach 60 Sek.)\n");
+            web.evaluateJavascript("(window.__foxDiag?window.__foxDiag():0)", x -> ui.postDelayed(() ->
+                web.evaluateJavascript("JSON.stringify(window.__foxDiagAll||[])", raw -> {
+                    try {
+                        org.json.JSONArray all = new org.json.JSONArray(new org.json.JSONTokener(raw).nextValue().toString());
+                        for (int i = 0; i < all.length(); i++) {
+                            JSONObject f = all.getJSONObject(i);
+                            probeText.append("Rahmen ").append(f.optString("frame")).append(":\n");
+                            org.json.JSONArray fl = f.optJSONArray("fields");
+                            for (int k = 0; fl != null && k < fl.length() && k < 25; k++) probeText.append("  · ").append(fl.optString(k)).append("\n");
+                        }
+                    } catch (Exception ignored) {
+                    }
+                    nextProbe();
+                }), 1500));
+            return;
+        }
+        web.evaluateJavascript("JSON.stringify(window.__foxProbe||{})", raw -> {
+            try {
+                JSONObject r = new JSONObject(new org.json.JSONTokener(raw).nextValue().toString());
+                org.json.JSONArray fl = r.optJSONArray("filled");
+                probeText.append("✍️ Ausgefüllt:\n");
+                for (int i = 0; fl != null && i < fl.length(); i++) {
+                    org.json.JSONArray x = fl.optJSONArray(i);
+                    probeText.append("  · ").append(x.optString(0)).append(": ").append(x.optString(1)).append("\n");
+                }
+                org.json.JSONArray ch = r.optJSONArray("checks");
+                if (ch != null && ch.length() > 0) {
+                    probeText.append("☑️ Häkchen gesetzt:\n");
+                    for (int i = 0; i < ch.length(); i++) probeText.append("  · ").append(ch.optString(i)).append("\n");
+                }
+                String b = r.optString("button");
+                if (b.isEmpty()) probeText.append("❌ Absende-Knopf NICHT gefunden\n");
+                else {
+                    probeText.append("🔴 Hätte geklickt: „").append(b).append("“ (rot markiert)\n");
+                    probeOk++;
+                }
+            } catch (Exception e) {
+                probeText.append("⚠️ Bericht konnte nicht gelesen werden\n");
+            }
+            Toast.makeText(this, "🧪 Probelauf: nichts abgeschickt – sieh dir die rote Markierung an", Toast.LENGTH_LONG).show();
+            ui.postDelayed(this::nextProbe, 6000);
+        });
+    }
+
+    private void nextProbe() {
+        qi++;
+        loadStep();
+    }
+
+    private void showProbeReport() {
+        final String text = "🧪 Probelauf – NICHTS wurde abgeschickt\n" + probeOk + " von " + total + " Formularen vollständig erkannt\n" + probeText;
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextIsSelectable(true);
+        tv.setTextSize(13);
+        tv.setPadding(dp(20), dp(12), dp(20), dp(12));
+        sv.addView(tv);
+        new android.app.AlertDialog.Builder(this)
+            .setTitle(probeOk == total ? "✅ Probelauf erfolgreich" : "⚠️ Probelauf: bitte prüfen")
+            .setView(sv)
+            .setPositiveButton("Kopieren", (d, w) -> {
+                android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("Fox Testpilot", text));
+                Toast.makeText(this, "📋 Bericht kopiert", Toast.LENGTH_SHORT).show();
+                finish();
+            })
+            .setNegativeButton("Schließen", (d, w) -> finish())
+            .setOnCancelListener(d -> finish())
+            .show();
     }
 
     private void stepFinished() {
@@ -150,10 +239,13 @@ public class ApplyActivity extends Activity {
                 web.evaluateJavascript("window.__foxState||''", v -> {
                     if (stepDone || v == null) return;
                     long now = System.currentTimeMillis();
-                    if (v.contains("success")) stepFinished();
+                    if (v.contains("probe")) probeFinished(true);
+                    else if (v.contains("success")) stepFinished();
                     else if (v.contains("submitted")) {
                         if (submittedAt == 0) submittedAt = now;
                         else if (now - submittedAt > 10000) stepFinished();
+                    } else if (probeMode && now - stepStart > 60000) {
+                        probeFinished(false);
                     } else if (!warned && now - stepStart > 75000) {
                         warned = true;
                         Toast.makeText(ApplyActivity.this, "Hier ging es nicht automatisch – bitte selbst ausfüllen/absenden oder „Weiter ▶“ tippen", Toast.LENGTH_LONG).show();
@@ -166,6 +258,10 @@ public class ApplyActivity extends Activity {
 
     /** Baut das Ausfüll-Skript: gespeicherte Daten + www/autofill.js. */
     static String buildScript(android.content.Context c, String product, String url, String autoAid) {
+        return buildScript(c, product, url, autoAid, false);
+    }
+
+    static String buildScript(android.content.Context c, String product, String url, String autoAid, boolean probe) {
         try {
             JSONObject p = new JSONObject(PilotChecker.prefs(c).getString(PilotChecker.profileKey(c), "{}"));
             String name = product == null || product.trim().isEmpty() ? "das Testprodukt" : product.trim();
@@ -193,6 +289,7 @@ public class ApplyActivity extends Activity {
             if (autoAid != null) {
                 p.put("auto", true);
                 p.put("aid", autoAid);
+                p.put("probe", probe);
             }
             InputStream in = c.getAssets().open("public/autofill.js");
             ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -249,7 +346,10 @@ public class ApplyActivity extends Activity {
             String q = getIntent().getStringExtra("queue");
             if (q != null) {
                 queue = new org.json.JSONArray(q);
-                for (int i = 0; i < queue.length(); i++) if (!queue.optJSONObject(i).optBoolean("login")) total++;
+                for (int i = 0; i < queue.length(); i++) {
+                    if (!queue.optJSONObject(i).optBoolean("login")) total++;
+                    if (queue.optJSONObject(i).optBoolean("probe")) probeMode = true;
+                }
             }
         } catch (Exception ignored) {
         }

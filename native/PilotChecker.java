@@ -323,6 +323,7 @@ public class PilotChecker {
             shops.put(checkShop(c, i, before, notify, manual));
         }
         st.put("shops", shops);
+        st.put("custom", checkCustom(c, prev == null ? null : prev.optJSONArray("custom"), notify, manual));
         prefs(c).edit().putString("last", st.toString()).commit();
         PilotWidget.updateAll(c);
         return st;
@@ -612,6 +613,71 @@ public class PilotChecker {
         } catch (Exception e) {
             return -1;
         }
+    }
+
+    // ---- Eigene Seiten: beliebige Produkttester-Seiten mit Stichwörtern ----
+
+    public static JSONArray customPages(Context c) {
+        try {
+            return new JSONArray(prefs(c).getString("custom", "[]"));
+        } catch (Exception e) {
+            return new JSONArray();
+        }
+    }
+
+    static List<String> keywords(String s) {
+        List<String> out = new ArrayList<>();
+        for (String k : s.toLowerCase(Locale.GERMANY).split("[,;\\n]")) if (!k.trim().isEmpty()) out.add(k.trim());
+        return out;
+    }
+
+    /** Meldet sich, sobald eines der Stichwörter NEU auf der Seite steht (vorher nicht da war). */
+    static JSONArray checkCustom(Context c, JSONArray prev, boolean notify, boolean manual) {
+        JSONArray pages = customPages(c), out = new JSONArray();
+        for (int i = 0; i < pages.length(); i++) {
+            JSONObject p = pages.optJSONObject(i);
+            JSONObject r = new JSONObject();
+            try {
+                String id = p.optString("id"), name = p.optString("name"), url = p.optString("url");
+                r.put("id", id).put("name", name).put("url", url).put("time", System.currentTimeMillis());
+                JSONObject before = null;
+                for (int j = 0; prev != null && j < prev.length(); j++) if (id.equals(prev.optJSONObject(j).optString("id"))) before = prev.optJSONObject(j);
+                WebLoader.Result w = WebLoader.load(c, url, 30000, 9000);
+                if (w.error == null && looksBlocked(w.text)) w.error = "Seite hat den Abruf blockiert";
+                if (w.error != null) {
+                    if (before != null) r.put("found", before.optJSONArray("found"));
+                    r.put("error", w.error);
+                    if (manual) history(c, "⚠️ " + name + ": " + w.error);
+                    out.put(r);
+                    continue;
+                }
+                String text = w.text.toLowerCase(Locale.GERMANY);
+                JSONArray found = new JSONArray();
+                List<String> fresh = new ArrayList<>();
+                Set<String> old = new HashSet<>();
+                JSONArray bf = before == null ? null : before.optJSONArray("found");
+                for (int k = 0; bf != null && k < bf.length(); k++) old.add(bf.optString(k));
+                for (String k : keywords(p.optString("keywords"))) {
+                    if (!text.contains(k)) continue;
+                    found.put(k);
+                    if (!old.contains(k)) fresh.add(k);
+                }
+                r.put("found", found);
+                // Beim allerersten Prüfen nichts melden – erst Änderungen danach
+                if (before != null && !fresh.isEmpty()) {
+                    String body = "Neu auf der Seite: „" + android.text.TextUtils.join("“, „", fresh) + "“";
+                    if (notify) showNotification(c, 350 + i, "🌐 " + name, body, false, url);
+                    history(c, "🌐 " + name + ": " + body);
+                }
+            } catch (Exception e) {
+                try {
+                    r.put("error", "Fehler: " + e.getClass().getSimpleName());
+                } catch (Exception ignored) {
+                }
+            }
+            out.put(r);
+        }
+        return out;
     }
 
     static String statusText(String s) {

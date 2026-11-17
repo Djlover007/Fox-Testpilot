@@ -160,6 +160,10 @@ details.card .hist{padding:0 0 8px;margin:0;background:none}
 .dots i{width:8px;height:8px;border-radius:50%;background:var(--chip)}.dots i.on{background:var(--accent);width:22px;border-radius:4px}
 .help h4{font-size:15px;margin:14px 4px 4px}
 .help p{font-size:14px;color:var(--muted);line-height:1.5;margin:0 4px}
+.cp{display:flex;align-items:center;gap:8px;background:var(--chip);border-radius:12px;padding:10px 12px;margin-top:8px;font-size:14px}
+.cp div{flex:1;min-width:0}.cp small{display:block;color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cp button{border:0;background:var(--card);border-radius:10px;padding:7px 10px}
+.cshop{--shop:#0aa5a5}
 </style>
 <script src="version.js"></script>
 </head>
@@ -191,6 +195,7 @@ details.card .hist{padding:0 0 8px;margin:0;background:none}
     <div class="people"></div>
     <button class="btn light" id="perm" hidden>🔔 Benachrichtigungen erlauben</button>
     <div id="list"></div>
+    <div id="clist"></div>
   </section>
 
   <!-- Bewerbungen -->
@@ -258,6 +263,19 @@ details.card .hist{padding:0 0 8px;margin:0;background:none}
       <label class="opt"><div>😴 Nachtruhe<small>Meldungen kommen dann lautlos. Start-Alarm und 10-Minuten-Erinnerung bleiben hörbar.</small></div><input type="checkbox" id="quiet"></label>
       <div class="opt"><div>Nachtruhe von / bis</div><select id="qfrom"></select><select id="qto"></select></div>
       <button class="btn light" id="test">🔔 Test-Benachrichtigung senden</button>
+    </details>
+    <details class="card" open><summary><i>🤖</i>Auto-Modus</summary>
+      <label class="opt"><div>🧪 Probelauf<small>Füllt alles aus und markiert den Absende-Knopf rot, schickt aber NICHTS ab. Danach siehst du einen Bericht. Zum Testen vor dem echten Start.</small></div><input type="checkbox" id="probe"></label>
+    </details>
+    <details class="card"><summary><i>🌐</i>Eigene Seiten</summary>
+      <div class="form">
+        <p>Weitere Produkttester-Seiten überwachen. Die App meldet sich (Handy + Discord), sobald eines deiner Stichwörter <b>neu</b> auf der Seite steht – z. B. „jetzt bewerben“ oder „neue Testaktion“.</p>
+        <div id="cpages"></div>
+        <input id="c_name" placeholder="Name, z. B. Produkttester XY">
+        <input id="c_url" type="url" placeholder="https://…" autocomplete="off">
+        <input id="c_kw" placeholder="Stichwörter mit Komma, z. B. jetzt bewerben, neue aktion">
+        <button class="btn" id="c_add">➕ Seite hinzufügen</button>
+      </div>
     </details>
     <details class="card"><summary><i>💬</i>Discord <span id="dcst" style="font-size:13px;font-weight:600;color:var(--ok)"></span></summary>
       <div class="form">
@@ -336,6 +354,7 @@ var checking = false;
 var heroUrl = PAGE;
 var sel = {};
 var introShown = false;
+var PROBE = true;
 
 function call(method, options, timeoutMs) {
   if (!NATIVE) return Promise.reject(new Error("Nur in der Android-App verfügbar"));
@@ -563,7 +582,7 @@ function buildQueue(everyone) {
       var mine = prods.filter(function (p) { return p.key === key && !done[p.aid]; });
       if (!mine.length) return;
       items.push({ login: true, url: ACC_URL[key], name: "Anmeldung " + mine[0].shop, person: per.id, label: multi ? per.label : "" });
-      mine.forEach(function (p) { items.push({ url: p.url, name: p.name, aid: p.aid, shop: p.shop, person: per.id, label: multi ? per.label : "" }); });
+      mine.forEach(function (p) { items.push({ url: p.url, name: p.name, aid: p.aid, shop: p.shop, person: per.id, label: multi ? per.label : "", probe: PROBE }); });
     });
   });
   return items;
@@ -573,20 +592,52 @@ function renderAuto() {
   var n = countApps(buildQueue(false)), all = state.persons.length > 1 ? countApps(buildQueue(true)) : 0;
   $("autobar").hidden = TAB !== "home" || (!n && !all);
   $("autogo").hidden = !n;
-  $("autogo").textContent = state.persons.length > 1 ? "🤖 Nur " + activeLabel() + " (" + n + ")" : "🤖 " + n + (n === 1 ? " Produkt" : " Produkte") + " automatisch bewerben";
+  var ic = PROBE ? "🧪 " : "🤖 ";
+  $("autogo").textContent = state.persons.length > 1 ? ic + "Nur " + activeLabel() + " (" + n + ")" : ic + n + (n === 1 ? " Produkt" : " Produkte") + (PROBE ? " – Probelauf" : " automatisch bewerben");
   $("autoall").hidden = !all;
-  $("autoall").textContent = "👥 Alle Personen (" + all + ")";
+  $("autoall").textContent = (PROBE ? "🧪 " : "👥 ") + "Alle Personen (" + all + ")";
 }
 function startQueue(everyone) {
   var items = buildQueue(everyone), n = countApps(items);
   if (!n) return;
   var who = everyone ? "für alle Personen nacheinander" : (state.persons.length > 1 ? "als " + activeLabel() : "");
+  if (PROBE) {
+    if (!confirm("🧪 Probelauf für " + n + (n === 1 ? " Produkt" : " Produkte") + " " + who + "?\n\nDie App meldet an und füllt alles aus, schickt aber NICHTS ab. Am Ende siehst du einen Bericht.\n\nFür echte Bewerbungen den Probelauf unter Einstellungen → Auto-Modus ausschalten.")) return;
+    call("openQueue", { items: items }).catch(function (e) { alertErr(e.message); });
+    return;
+  }
   if (!confirm(n + (n === 1 ? " Bewerbung" : " Bewerbungen") + " automatisch abschicken " + who + "?\n\nDie App meldet an, füllt das Formular mit den gespeicherten Daten der jeweiligen Person aus, akzeptiert die Teilnahmebedingungen und den Datenschutzhinweis in deren Namen und schickt ab.")) return;
   call("openQueue", { items: items }).then(function () { sel = {}; }).catch(function (e) { alertErr(e.message); });
 }
 $("autogo").onclick = function () { startQueue(false); };
 $("autoall").onclick = function () { startQueue(true); };
-function render() { renderHero(); renderList(); renderAuto(); }
+function renderCustom() {
+  var res = (state.last && state.last.custom) || [], pages = state.customPages || [];
+  if (!pages.length) { $("clist").innerHTML = ""; return; }
+  $("clist").innerHTML = '<div class="shophead cshop"><span class="pill">🌐 Eigene Seiten</span></div>' + pages.map(function (p) {
+    var r = res.filter(function (x) { return x.id === p.id; })[0] || {}, f = r.found || [];
+    var line = r.error ? "⚠️ " + r.error : !r.time ? "Noch nicht geprüft" : f.length ? "🔔 Gefunden: „" + f.join("“, „") + "“" : "Keines der Stichwörter auf der Seite";
+    return '<div class="shop cshop"><span><b>' + esc(p.name) + "</b><br>" + esc(line) + '</span><button class="pg" data-curl="' + esc(p.url) + '">Seite ↗</button></div>';
+  }).join("");
+}
+function renderCustomSettings() {
+  $("cpages").innerHTML = (state.customPages || []).map(function (p) {
+    return '<div class="cp"><div><b>' + esc(p.name) + "</b><small>" + esc(p.url) + "</small><small>🔑 " + esc(p.keywords) + '</small></div><button data-cdel="' + esc(p.id) + '" aria-label="Löschen">🗑️</button></div>';
+  }).join("");
+}
+$("cpages").onclick = function (ev) {
+  var b = ev.target.closest("[data-cdel]"); if (!b) return;
+  if (!confirm("Diese Seite nicht mehr überwachen?")) return;
+  call("setCustom", { id: b.dataset.cdel, remove: true }, 10000).then(load).catch(function (e) { alertErr(e.message); });
+};
+$("c_add").onclick = function () {
+  call("setCustom", { name: $("c_name").value.trim(), url: $("c_url").value.trim(), keywords: $("c_kw").value.trim() }, 10000).then(function () {
+    $("c_name").value = ""; $("c_url").value = ""; $("c_kw").value = "";
+    return load();
+  }).then(function () { if (!checking) check(); }).catch(function (e) { alertErr(e.message); });
+};
+$("clist").onclick = function (ev) { var b = ev.target.closest("[data-curl]"); if (b) call("openUrl", { url: b.dataset.curl }).catch(function () { window.open(b.dataset.curl, "_blank"); }); };
+function render() { renderHero(); renderList(); renderCustom(); renderAuto(); }
 
 function load() {
   return call("getState", {}, 10000).then(function (s) {
@@ -596,6 +647,10 @@ function load() {
     state.active = s.active || "p1";
     state.appliedAll = s.appliedAll || {};
     state.info = s.info || {};
+    state.customPages = s.customPages || [];
+    renderCustomSettings();
+    PROBE = s.probe !== false;
+    $("probe").checked = PROBE;
     $("dcon").checked = !!s.discordOn;
     $("dcping").checked = !!s.discordPing;
     $("dcst").textContent = s.discordSet ? (s.discordOn ? "· aktiv" : "· aus") : "";
@@ -716,6 +771,7 @@ $("alarm").onchange = function () { saveSettings({ alarm: $("alarm").checked });
 })();
 function saveQuiet() { saveSettings({ quiet: $("quiet").checked, quietFrom: parseInt($("qfrom").value, 10), quietTo: parseInt($("qto").value, 10) }); }
 $("quiet").onchange = saveQuiet;
+$("probe").onchange = function () { PROBE = $("probe").checked; renderAuto(); saveSettings({ probe: PROBE }); };
 $("dcon").onchange = function () { saveSettings({ discordOn: $("dcon").checked }); };
 $("dcping").onchange = function () { saveSettings({ discordPing: $("dcping").checked }); };
 $("dcsave").onclick = function () {

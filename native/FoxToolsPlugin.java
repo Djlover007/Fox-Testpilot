@@ -83,6 +83,8 @@ public class FoxToolsPlugin extends Plugin {
             r.put("alarm", PilotChecker.alarmOn(getContext()));
             r.put("quiet", PilotChecker.prefs(getContext()).getBoolean("quiet", false));
             r.put("theme", PilotChecker.prefs(getContext()).getString("theme", "auto"));
+            r.put("customPages", new JSArray(PilotChecker.customPages(getContext()).toString()));
+            r.put("probe", PilotChecker.prefs(getContext()).getBoolean("probe", true));
             r.put("discordOn", PilotChecker.prefs(getContext()).getBoolean("discordOn", false));
             r.put("discordPing", PilotChecker.prefs(getContext()).getBoolean("discordPing", false));
             r.put("discordSet", Discord.valid(PilotChecker.prefs(getContext()).getString("discordUrl", "")));
@@ -124,6 +126,7 @@ public class FoxToolsPlugin extends Plugin {
         if (call.hasOption("background")) e.putBoolean("background", Boolean.TRUE.equals(call.getBoolean("background")));
         if (call.hasOption("interval")) e.putInt("interval", Math.max(15, call.getInt("interval", 30)));
         if (call.hasOption("alarm")) e.putBoolean("alarm", Boolean.TRUE.equals(call.getBoolean("alarm")));
+        if (call.hasOption("probe")) e.putBoolean("probe", Boolean.TRUE.equals(call.getBoolean("probe")));
         if (call.hasOption("discordOn")) e.putBoolean("discordOn", Boolean.TRUE.equals(call.getBoolean("discordOn")));
         if (call.hasOption("discordPing")) e.putBoolean("discordPing", Boolean.TRUE.equals(call.getBoolean("discordPing")));
         if (call.hasOption("theme")) e.putString("theme", call.getString("theme", "auto"));
@@ -134,6 +137,40 @@ public class FoxToolsPlugin extends Plugin {
         e.commit();
         applyBackground(true);
         getState(call);
+    }
+
+    /** Eigene Seite hinzufügen (id leer) oder löschen (remove=true). */
+    @PluginMethod
+    public void setCustom(PluginCall call) {
+        try {
+            org.json.JSONArray a = PilotChecker.customPages(getContext()), out = new org.json.JSONArray();
+            String id = call.getString("id", "");
+            if (Boolean.TRUE.equals(call.getBoolean("remove", false))) {
+                for (int i = 0; i < a.length(); i++) if (!id.equals(a.getJSONObject(i).optString("id"))) out.put(a.getJSONObject(i));
+            } else {
+                String url = call.getString("url", "").trim();
+                if (!url.matches("^https?://[^\\s/]+\\.[^\\s]+$")) {
+                    call.reject("Bitte eine vollständige Adresse eingeben (https://…)");
+                    return;
+                }
+                if (call.getString("keywords", "").trim().isEmpty()) {
+                    call.reject("Bitte mindestens ein Stichwort eingeben");
+                    return;
+                }
+                if (a.length() >= 8) {
+                    call.reject("Höchstens 8 eigene Seiten");
+                    return;
+                }
+                out = a;
+                String name = call.getString("name", "").trim();
+                if (name.isEmpty()) name = android.net.Uri.parse(url).getHost();
+                out.put(new JSONObject().put("id", "c" + System.currentTimeMillis()).put("name", name).put("url", url).put("keywords", call.getString("keywords", "").trim()));
+            }
+            PilotChecker.prefs(getContext()).edit().putString("custom", out.toString()).commit();
+            getState(call);
+        } catch (Exception e) {
+            call.reject(e.getMessage());
+        }
     }
 
     /** Webhook speichern (leer = entfernen). Die Adresse geht nie zurück an die Oberfläche. */
@@ -484,6 +521,7 @@ public class FoxToolsPlugin extends Plugin {
             set.put("background", sp.getBoolean("background", true)).put("interval", sp.getInt("interval", 30)).put("alarm", sp.getBoolean("alarm", false))
                     .put("quiet", sp.getBoolean("quiet", false)).put("quietFrom", sp.getInt("quietFrom", 22)).put("quietTo", sp.getInt("quietTo", 7));
             out.put("settings", set);
+            out.put("custom", PilotChecker.customPages(getContext()));
             JSObject r = new JSObject();
             r.put("json", out.toString());
             call.resolve(r);
@@ -529,6 +567,7 @@ public class FoxToolsPlugin extends Plugin {
                         .putBoolean("alarm", set.optBoolean("alarm", false)).putBoolean("quiet", set.optBoolean("quiet", false))
                         .putInt("quietFrom", set.optInt("quietFrom", 22)).putInt("quietTo", set.optInt("quietTo", 7));
             }
+            if (in.optJSONArray("custom") != null) e.putString("custom", in.optJSONArray("custom").toString());
             e.commit();
             logoutBrowser();
             applyBackground(true);
