@@ -629,6 +629,11 @@ public class PilotChecker {
     }
 
     public static boolean showNotification(Context c, int id, String title, String body, boolean alarm, String target) {
+        // Zusätzlich nach Discord (auch wenn Handy-Benachrichtigungen aus sind); Test-Meldung (999) läuft separat
+        if (id != 999) {
+            boolean ping = alarm || id % 100 == 1 || (id >= 700 && id < 750);
+            Discord.sendAsync(c, title, body, target, ping && prefs(c).getBoolean("discordPing", false));
+        }
         if (!notificationsAllowed(c)) return false;
         boolean quiet = !alarm && !(id >= 700 && id < 750) && inQuiet(c);
         if (Build.VERSION.SDK_INT >= 26) {

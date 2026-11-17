@@ -259,6 +259,17 @@ details.card .hist{padding:0 0 8px;margin:0;background:none}
       <div class="opt"><div>Nachtruhe von / bis</div><select id="qfrom"></select><select id="qto"></select></div>
       <button class="btn light" id="test">🔔 Test-Benachrichtigung senden</button>
     </details>
+    <details class="card"><summary><i>💬</i>Discord <span id="dcst" style="font-size:13px;font-weight:600;color:var(--ok)"></span></summary>
+      <div class="form">
+        <p>Alle Meldungen kommen zusätzlich als Nachricht in einen Discord-Kanal – auch aufs Handy, den PC oder an Freunde.<br>
+        <b>So geht's:</b> In Discord Rechtsklick auf deinen Kanal → <b>Kanal bearbeiten</b> → <b>Integrationen</b> → <b>Webhooks</b> → <b>Neuer Webhook</b> → <b>Webhook-URL kopieren</b> und hier einfügen.</p>
+        <input id="dcurl" type="url" placeholder="https://discord.com/api/webhooks/…" autocomplete="off">
+        <div class="two"><button class="btn" id="dcsave">Speichern</button><button class="btn light" id="dctest">Test senden</button></div>
+      </div>
+      <label class="opt"><div>💬 Meldungen an Discord senden</div><input type="checkbox" id="dcon"></label>
+      <label class="opt"><div>📣 Beim Start @everyone erwähnen<small>Damit alle im Kanal laut benachrichtigt werden, wenn die Bewerbung startet</small></div><input type="checkbox" id="dcping"></label>
+      <button class="btn light" id="dcdel" hidden>Webhook entfernen</button>
+    </details>
     <details class="card"><summary><i>🎨</i>Aussehen</summary>
       <label class="opt"><div>Hell oder dunkel<small>„Automatisch“ folgt der Handy-Einstellung</small></div>
         <select id="themesel"><option value="auto">Automatisch</option><option value="light">Hell</option><option value="dark">Dunkel</option></select></label>
@@ -585,6 +596,11 @@ function load() {
     state.active = s.active || "p1";
     state.appliedAll = s.appliedAll || {};
     state.info = s.info || {};
+    $("dcon").checked = !!s.discordOn;
+    $("dcping").checked = !!s.discordPing;
+    $("dcst").textContent = s.discordSet ? (s.discordOn ? "· aktiv" : "· aus") : "";
+    $("dcurl").placeholder = s.discordSet ? "Webhook gespeichert – neu einfügen zum Ändern" : "https://discord.com/api/webhooks/…";
+    $("dcdel").hidden = !s.discordSet;
     if (s.theme && s.theme !== THEME) { THEME = s.theme; applyTheme(); }
     if (NATIVE && !s.introDone && !introShown) { introShown = true; openIntro(); }
     $("quiet").checked = !!s.quiet;
@@ -699,7 +715,28 @@ $("alarm").onchange = function () { saveSettings({ alarm: $("alarm").checked });
   $("qfrom").innerHTML = o; $("qto").innerHTML = o; $("qfrom").value = "22"; $("qto").value = "7";
 })();
 function saveQuiet() { saveSettings({ quiet: $("quiet").checked, quietFrom: parseInt($("qfrom").value, 10), quietTo: parseInt($("qto").value, 10) }); }
-$("quiet").onchange = saveQuiet; $("qfrom").onchange = saveQuiet; $("qto").onchange = saveQuiet;
+$("quiet").onchange = saveQuiet;
+$("dcon").onchange = function () { saveSettings({ discordOn: $("dcon").checked }); };
+$("dcping").onchange = function () { saveSettings({ discordPing: $("dcping").checked }); };
+$("dcsave").onclick = function () {
+  var u = $("dcurl").value.trim();
+  if (!u) { alertErr("Bitte zuerst die Webhook-Adresse einfügen"); return; }
+  call("setDiscord", { url: u }, 10000).then(function () {
+    $("dcurl").value = ""; load();
+    $("dcsave").textContent = "✅ Gespeichert"; setTimeout(function () { $("dcsave").textContent = "Speichern"; }, 2500);
+  }).catch(function (e) { alertErr(e.message); });
+};
+$("dctest").onclick = function () {
+  var b = $("dctest"); b.disabled = true; b.textContent = "⏳ Sende …";
+  call("testDiscord", {}, 30000).then(function (r) {
+    b.textContent = r.ok ? "✅ Angekommen?" : "❌ Fehler " + r.code;
+    if (!r.ok) alertErr(r.code === 404 ? "Webhook gibt es nicht mehr – in Discord neu anlegen" : "Discord hat nicht geantwortet (Code " + r.code + ")");
+  }).catch(function (e) { alertErr(e.message); b.textContent = "Test senden"; }).then(function () { b.disabled = false; setTimeout(function () { b.textContent = "Test senden"; }, 4000); });
+};
+$("dcdel").onclick = function () {
+  if (!confirm("Discord-Webhook entfernen?")) return;
+  call("setDiscord", { url: "" }, 10000).then(load).catch(function (e) { alertErr(e.message); });
+}; $("qfrom").onchange = saveQuiet; $("qto").onchange = saveQuiet;
 
 // ---- Meine Bewerbungen ----
 function productName(aid) {

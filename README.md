@@ -18,6 +18,8 @@ In der App siehst du alle Testprodukte und hakst ab, wofür du dich schon beworb
 
 **Weitere Funktionen:** Auto-Modus (ausgewählte Produkte nacheinander ausfüllen und absenden, auch für alle Personen), eigene Bewerbungstexte je Stichwort, „Meine Bewerbungen“ mit Ergebnis und Erinnerung an die Bewertungs-Frist, Erinnerung 10 Minuten vor dem Start, Kalendereintrag, Nachtruhe, Startbildschirm-Widget, Sicherung als Text (ohne Passwörter) und eine Diagnose („Seiten testen“ / langes Drücken auf „Ausfüllen“ im App-Browser).
 
+**Discord:** Unter Einstellungen → Discord eine Webhook-Adresse einfügen; alle Meldungen kommen dann zusätzlich in den Kanal (auf Wunsch mit @everyone beim Start). Die Adresse bleibt nur auf dem Handy.
+
 ## APK und Updates
 Bei jedem Upload auf `main` baut GitHub Actions die App und veröffentlicht sie als **Release**.
 

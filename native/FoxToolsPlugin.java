@@ -83,6 +83,9 @@ public class FoxToolsPlugin extends Plugin {
             r.put("alarm", PilotChecker.alarmOn(getContext()));
             r.put("quiet", PilotChecker.prefs(getContext()).getBoolean("quiet", false));
             r.put("theme", PilotChecker.prefs(getContext()).getString("theme", "auto"));
+            r.put("discordOn", PilotChecker.prefs(getContext()).getBoolean("discordOn", false));
+            r.put("discordPing", PilotChecker.prefs(getContext()).getBoolean("discordPing", false));
+            r.put("discordSet", Discord.valid(PilotChecker.prefs(getContext()).getString("discordUrl", "")));
             r.put("introDone", PilotChecker.prefs(getContext()).getBoolean("introDone", false));
             r.put("quietFrom", PilotChecker.prefs(getContext()).getInt("quietFrom", 22));
             r.put("quietTo", PilotChecker.prefs(getContext()).getInt("quietTo", 7));
@@ -121,6 +124,8 @@ public class FoxToolsPlugin extends Plugin {
         if (call.hasOption("background")) e.putBoolean("background", Boolean.TRUE.equals(call.getBoolean("background")));
         if (call.hasOption("interval")) e.putInt("interval", Math.max(15, call.getInt("interval", 30)));
         if (call.hasOption("alarm")) e.putBoolean("alarm", Boolean.TRUE.equals(call.getBoolean("alarm")));
+        if (call.hasOption("discordOn")) e.putBoolean("discordOn", Boolean.TRUE.equals(call.getBoolean("discordOn")));
+        if (call.hasOption("discordPing")) e.putBoolean("discordPing", Boolean.TRUE.equals(call.getBoolean("discordPing")));
         if (call.hasOption("theme")) e.putString("theme", call.getString("theme", "auto"));
         if (call.hasOption("introDone")) e.putBoolean("introDone", Boolean.TRUE.equals(call.getBoolean("introDone")));
         if (call.hasOption("quiet")) e.putBoolean("quiet", Boolean.TRUE.equals(call.getBoolean("quiet")));
@@ -129,6 +134,36 @@ public class FoxToolsPlugin extends Plugin {
         e.commit();
         applyBackground(true);
         getState(call);
+    }
+
+    /** Webhook speichern (leer = entfernen). Die Adresse geht nie zurück an die Oberfläche. */
+    @PluginMethod
+    public void setDiscord(PluginCall call) {
+        String url = call.getString("url", "").trim();
+        if (!url.isEmpty() && !Discord.valid(url)) {
+            call.reject("Das ist keine Discord-Webhook-Adresse (https://discord.com/api/webhooks/…)");
+            return;
+        }
+        PilotChecker.prefs(getContext()).edit().putString("discordUrl", url).putBoolean("discordOn", !url.isEmpty()).commit();
+        getState(call);
+    }
+
+    @PluginMethod
+    public void testDiscord(PluginCall call) {
+        new Thread(() -> {
+            String hook = PilotChecker.prefs(getContext()).getString("discordUrl", "");
+            if (!Discord.valid(hook)) {
+                call.reject("Erst eine Webhook-Adresse speichern");
+                return;
+            }
+            int code = Discord.send(getContext(), hook, "🦊 Fox Testpilot ist verbunden",
+                    "Ab jetzt kommen die Testpiloten-Meldungen auch hier an.", PilotChecker.PAGE,
+                    PilotChecker.prefs(getContext()).getBoolean("discordPing", false));
+            JSObject r = new JSObject();
+            r.put("code", code);
+            r.put("ok", code >= 200 && code < 300);
+            call.resolve(r);
+        }).start();
     }
 
     @PluginMethod
