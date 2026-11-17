@@ -49,8 +49,9 @@ public class WebLoader {
         "    var im = a.querySelector('img');\n" +
         "    var n = clean(a.getAttribute('aria-label') || a.getAttribute('title') || '');\n" +
         "    if (!n) { var lines = String(a.innerText || '').split('\\n').map(clean).filter(function(s){ return s.length > 3 && !/^[\\d.,€\\s*%-]+$/.test(s); }); n = lines[0] || ''; }\n" +
-        "    if (!n && im) n = clean(im.getAttribute('alt'));\n" +
-        "    return n.slice(0, 140);\n" +
+        "    var alt = false;\n" +
+        "    if (!n && im) { n = clean(im.getAttribute('alt')); alt = true; }\n" +
+        "    return { n: n.slice(0, 140), alt: alt };\n" +
         "  }\n" +
         "  function isTest(a){\n" +
         "    var ctx = '';\n" +
@@ -61,10 +62,10 @@ public class WebLoader {
         "    var h = a.href || '';\n" +
         "    if (h.indexOf('/product/') < 0) return;\n" +
         "    var m = h.match(/-(\\d{5,10})\\.html/); if (!m) return;\n" +
-        "    var id = m[1], name = nameOf(a), img = imgOf(a), test = isTest(a);\n" +
-        "    if (seen[id] !== undefined) { var o = items[seen[id]]; if (!o.name && name) o.name = name; if (!o.img && img) o.img = img; o.test = o.test || test; return; }\n" +
+        "    var id = m[1], nm = nameOf(a), img = imgOf(a), test = isTest(a);\n" +
+        "    if (seen[id] !== undefined) { var o = items[seen[id]]; if ((!o.name || o.alt) && nm.n && !nm.alt) { o.name = nm.n; o.alt = false; } else if (!o.name && nm.n) { o.name = nm.n; o.alt = nm.alt; } if (!o.img && img) o.img = img; o.test = o.test || test; return; }\n" +
         "    seen[id] = items.length;\n" +
-        "    items.push({ id: id, url: h.split('?')[0].split('#')[0], name: name, img: img, test: test });\n" +
+        "    items.push({ id: id, url: h.split('?')[0].split('#')[0], name: nm.n, alt: nm.alt, img: img, test: test });\n" +
         "  });\n" +
         "  var b = document.body;\n" +
         "  var bottom = b ? (window.scrollY + window.innerHeight >= b.scrollHeight - 60) : false;\n" +

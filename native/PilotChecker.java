@@ -272,6 +272,15 @@ public class PilotChecker {
         return "";
     }
 
+    /** Hat der Link nur ein Bild, steht im Namen die Bildbeschreibung – dann lieber den Namen aus der Adresse nehmen. */
+    static void fixName(JSONObject o) {
+        try {
+            String fromUrl = productNameFromUrl(o.optString("url"));
+            if (o.optString("name").isEmpty() || (o.optBoolean("alt") && fromUrl.length() > 3)) o.put("name", fromUrl);
+        } catch (Exception ignored) {
+        }
+    }
+
     static String productNameFromUrl(String url) {
         try {
             String s = url.replaceAll(".*/product/_?", "").replaceAll("-\\d+\\.html.*$", "");
@@ -358,6 +367,11 @@ public class PilotChecker {
         long cd = countdownMs(text);
         if (cd >= 0) {
             long target = snap(System.currentTimeMillis() + cd);
+            // Countdown auf der Seite hängt manchmal ein paar Minuten nach: bisherige Zeit behalten, wenn sie nah dran ist
+            if (prev != null) {
+                long old = Math.max(prev.optLong("startAt"), prev.optLong("endAt"));
+                if (old > 0 && Math.abs(old - target) <= 10 * 60000L) target = old;
+            }
             int targetDay = ymdOf(target);
             if (status.equals("open") && targetDay > start) {
                 endAt = target;                       // läuft schon: Countdown zählt bis zum Ende
@@ -382,7 +396,7 @@ public class PilotChecker {
         for (int i = 0; i < all.length() && products.length() < 40; i++) {
             JSONObject o = all.optJSONObject(i);
             if (anyTest && !o.optBoolean("test")) continue;
-            if (o.optString("name").isEmpty()) o.put("name", productNameFromUrl(o.optString("url")));
+            fixName(o);
             o.put("aid", idPrefix + o.optString("id"));
             products.put(o);
         }
@@ -496,7 +510,7 @@ public class PilotChecker {
     /** Auf die Minute runden; liegt das Ziel höchstens 2 Min. neben einer vollen Viertelstunde, diese nehmen. */
     static long snap(long t) {
         long q = 15 * 60000L, near = Math.round(t / (double) q) * q;
-        return Math.abs(near - t) <= 2 * 60000L ? near : Math.round(t / 60000.0) * 60000L;
+        return Math.abs(near - t) <= 5 * 60000L ? near : Math.round(t / 60000.0) * 60000L;
     }
 
     static int ymdOf(long t) {
@@ -556,6 +570,7 @@ public class PilotChecker {
                 b.append("Produkt-Links: ").append(w.items.length()).append(", davon im Testbereich: ").append(test).append("\n");
                 for (int i = 0; i < w.items.length() && i < 8; i++) {
                     JSONObject o = w.items.optJSONObject(i);
+                    fixName(o);
                     b.append(o.optBoolean("test") ? " T " : " - ").append(o.optString("name")).append(" (").append(o.optString("id")).append(")\n");
                 }
                 b.append("Wichtige Zeilen:\n");
