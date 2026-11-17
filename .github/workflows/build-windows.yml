@@ -30,7 +30,8 @@ jobs:
 
       - name: Kurztest (Logik)
         working-directory: windows
-        run: python -c "import engine; t='61 Tage : 23 Stunden : 18 Minuten'; assert engine.countdown_ms(t) > 0; print(engine.name_from_url('https://www.mediamarkt.de/de/product/_bosch-bcrdw3bx-saugroboter-3006992.html'))"
+        run: |
+          python -c "import engine; assert engine.countdown_ms('61 Tage 23 Stunden 18 Minuten') > 0; print(engine.name_from_url('https://www.mediamarkt.de/de/product/_bosch-bcrdw3bx-saugroboter-3006992.html'))"
 
       - name: EXE bauen
         working-directory: windows
