@@ -2,9 +2,11 @@
 """Fox Testpilot für Windows: überwacht die Testpiloten von MediaMarkt und Saturn, meldet sich (Windows + Discord)
 und hilft beim Bewerben (Ausfüllen, Auto-Modus mit Probelauf)."""
 import copy
+import io
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import tempfile
@@ -29,19 +31,43 @@ try:
 except Exception:  # noqa: BLE001
     Notification = None
 
+try:
+    from PIL import Image, ImageDraw, ImageFont, ImageTk
+except Exception:  # noqa: BLE001
+    Image = None
+
 APP_NAME = "Fox Testpilot"
 REPO = "Djlover007/Fox-Testpilot"
 ICON = engine.resource("fox.ico")
+THUMBS = engine.APP_DIR / "bilder"
 INTERVALS = {"15 Minuten": 15, "30 Minuten": 30, "1 Stunde": 60, "3 Stunden": 180}
+THEMES = {"Automatisch": "auto", "Hell": "light", "Dunkel": "dark"}
+FONT = "Segoe UI"
 
-BG = "#eef4fd"
-CARD = "#ffffff"
-BLUE = "#2b6fde"
-FOX = "#f28c28"
-GREEN = "#1f9d55"
-PURPLE = "#7b2fd1"
-MUTED = "#5d6b88"
+BLUE, FOX, GREEN, PURPLE = "#2b6fde", "#f28c28", "#1f9d55", "#7b2fd1"
+SHOP_COLOR = {"mm": "#e3000f", "saturn": "#f08300"}
+AVATAR_COLORS = ["#2b6fde", "#e0457b", "#1f9d55", "#f28c28", "#7b2fd1", "#0aa5a5"]
 HERO = {"open": "#1f9d55", "soon": "#e0761c", "none": "#3b4fc4", "err": "#a8650b"}
+
+LIGHT = dict(bg="#eef4fd", card="#ffffff", text="#16213f", muted="#5d6b88", field="#f4f7fc", border="#d6e0f0",
+             sel="#dbe7fb", head="#f4f7fc", done="#e4f6ec", win="#fff3c4", lost="#f1f2f5")
+DARK = dict(bg="#0f1526", card="#1a2338", text="#eef4fd", muted="#a7b5d1", field="#232e4a", border="#2c3a5c",
+            sel="#2b3f6b", head="#232e4a", done="#173a2a", win="#4a3d10", lost="#262d3d")
+P = dict(LIGHT)
+
+EMOJI = re.compile("[\U0001F000-\U0001FAFF☀-➿⬀-⯿️‍⏰-⏿⌚⌛]+ ?")
+
+
+def plain(s):
+    """Emojis entfernen – Windows zeigt sie in Programmfenstern nur als graue Umrisse."""
+    return EMOJI.sub("", s or "").strip()
+
+
+def mix(c1, c2, t):
+    a = [int(c1[i:i + 2], 16) for i in (1, 3, 5)]
+    b = [int(c2[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(x + (y - x) * t):02x}" for x, y in zip(a, b))
+
 
 CFG_REF = {}
 
@@ -60,6 +86,26 @@ def notify(title, body, alarm=False, url=None, ping=False, discord=True):
         n.show()
     except Exception:  # noqa: BLE001
         pass
+
+
+def windows_dark():
+    try:
+        import winreg
+        k = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+        v, _ = winreg.QueryValueEx(k, "AppsUseLightTheme")
+        winreg.CloseKey(k)
+        return v == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def bold_font(size):
+    for name in ("segoeuib.ttf", "arialbd.ttf", "DejaVuSans-Bold.ttf"):
+        try:
+            return ImageFont.truetype(name, size)
+        except Exception:  # noqa: BLE001
+            continue
+    return ImageFont.load_default()
 
 
 class Worker(threading.Thread):
@@ -95,8 +141,7 @@ class Worker(threading.Thread):
         self.app.post(self.app.merge_check, snap)
 
     def job_open(self, pid, url, product):
-        cfg = self.app.snapshot()
-        self.eng.open_visible(cfg, pid, url, product)
+        self.eng.open_visible(self.app.snapshot(), pid, url, product)
 
     def job_reset(self, pid):
         self.eng.reset(pid)
@@ -107,8 +152,7 @@ class Worker(threading.Thread):
         self.app.post(self.app.show_loginstate, res)
 
     def job_diagnose(self):
-        text = self.eng.diagnose()
-        self.app.post(self.app.show_text, "🔍 Diagnose", text)
+        self.app.post(self.app.show_text, "Diagnose", self.eng.diagnose())
 
     def job_queue(self, items):
         cfg = self.app.snapshot()
@@ -121,9 +165,9 @@ class Worker(threading.Thread):
 
         sent, total, report = self.eng.run_queue(cfg, items, progress, applied)
         if report:
-            self.app.post(self.app.show_text, "🧪 Probelauf-Bericht", report)
+            self.app.post(self.app.show_text, "Probelauf-Bericht", report)
         else:
-            self.app.post(lambda: messagebox.showinfo(APP_NAME, f"🤖 Fertig: {sent} von {total} Bewerbungen abgeschickt."))
+            self.app.post(lambda: messagebox.showinfo(APP_NAME, f"Fertig: {sent} von {total} Bewerbungen abgeschickt."))
             self.app.log(f"Auto-Modus fertig: {sent} von {total} abgeschickt")
 
 
@@ -138,20 +182,22 @@ class App:
         self._busy = 0
         self.next_check = 0
         self.update_url = None
+        self.loglines = []
+        self.imgs = {}
+        self.fetching = set()
+        self.hero_target, self.hero_label = 0, ""
         self.root = tk.Tk()
-        self.root.title(f"🦊 {APP_NAME}" + (f" – Version 1.{BUILD}" if BUILD else ""))
-        self.root.geometry("1040x800")
-        self.root.minsize(900, 680)
-        self.root.configure(bg=BG)
+        self.root.title(f"{APP_NAME}" + (f" – Version 1.{BUILD}" if BUILD else ""))
+        self.root.geometry("1080x900")
+        self.root.minsize(920, 680)
         try:
             self.root.iconbitmap(ICON)
         except Exception:  # noqa: BLE001
             pass
-        self.style()
-        self.build()
+        self.main = None
+        self.rebuild()
         self.worker = Worker(self)
         self.worker.start()
-        self.render_all()
         self.root.after(200, self.pump)
         self.root.after(1500, lambda: self.check(manual=True))
         self.root.after(1000, self.tick)
@@ -176,6 +222,8 @@ class App:
         self.post(self._log, f"{datetime.now():%H:%M:%S}  {msg}")
 
     def _log(self, line):
+        self.loglines.append(line)
+        del self.loglines[:-300]
         self.logbox.configure(state="normal")
         self.logbox.insert("end", line + "\n")
         self.logbox.see("end")
@@ -186,11 +234,7 @@ class App:
 
     def _set_busy(self, on):
         self._busy = max(0, self._busy + (1 if on else -1))
-        self.btn_check.configure(text="⏳ Läuft …" if self._busy > 0 else "🔍 Jetzt prüfen")
-
-    def save(self):
-        with self.cfg_lock:
-            save_config(self.cfg)
+        self.btn_check.configure(text="Läuft …" if self._busy > 0 else "Jetzt prüfen")
 
     def snapshot(self):
         with self.cfg_lock:
@@ -207,44 +251,172 @@ class App:
     def me(self):
         return person(self.cfg)
 
-    # ---------- Aussehen ----------
+    def set_cfg(self, key, val):
+        with self.cfg_lock:
+            self.cfg[key] = val
+            save_config(self.cfg)
+
+    # ---------- Aussehen: Farben, Bilder ----------
+    def is_dark(self):
+        t = self.cfg.get("theme", "auto")
+        return t == "dark" or (t == "auto" and windows_dark())
+
+    def rebuild(self):
+        """Ganze Oberfläche (neu) aufbauen – z. B. nach Wechsel hell/dunkel."""
+        P.clear()
+        P.update(DARK if self.is_dark() else LIGHT)
+        if self.main is not None:
+            self.main.destroy()
+        self.root.configure(bg=P["bg"])
+        self.style()
+        self.imgs = {}
+        self.main = tk.Frame(self.root, bg=P["bg"])
+        self.main.pack(fill="both", expand=True)
+        self.build()
+        self.render_all()
+        self.logbox.configure(state="normal")
+        self.logbox.insert("end", "".join(line + "\n" for line in self.loglines))
+        self.logbox.configure(state="disabled")
+        self.dark_titlebar()
+
+    def dark_titlebar(self):
+        try:
+            import ctypes
+            self.root.update_idletasks()
+            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+            val = ctypes.c_int(1 if self.is_dark() else 0)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(val), ctypes.sizeof(val))
+        except Exception:  # noqa: BLE001
+            pass
+
     def style(self):
         st = ttk.Style()
         try:
             st.theme_use("clam")
         except tk.TclError:
             pass
-        st.configure(".", font=("Segoe UI", 10), background=BG)
-        st.configure("TNotebook", background=BG, borderwidth=0)
-        st.configure("TNotebook.Tab", padding=(16, 8), font=("Segoe UI Semibold", 10))
-        st.map("TNotebook.Tab", background=[("selected", CARD)], foreground=[("selected", BLUE)])
-        st.configure("TFrame", background=BG)
-        st.configure("Card.TFrame", background=CARD)
-        st.configure("TLabel", background=BG)
-        st.configure("Card.TLabel", background=CARD)
-        st.configure("Muted.TLabel", background=CARD, foreground=MUTED, font=("Segoe UI", 9))
-        st.configure("H.TLabel", background=CARD, font=("Segoe UI Semibold", 12))
-        st.configure("TCheckbutton", background=CARD)
-        st.configure("Accent.TButton", background=BLUE, foreground="white", padding=(12, 7), font=("Segoe UI Semibold", 10))
-        st.map("Accent.TButton", background=[("active", "#1f5cc0")])
-        st.configure("Fox.TButton", background=FOX, foreground="white", padding=(12, 7), font=("Segoe UI Semibold", 10))
-        st.map("Fox.TButton", background=[("active", "#d4700f")])
-        st.configure("Purple.TButton", background=PURPLE, foreground="white", padding=(12, 7), font=("Segoe UI Semibold", 10))
-        st.map("Purple.TButton", background=[("active", "#6224ad")])
-        st.configure("TButton", padding=(10, 6))
-        st.configure("Treeview", rowheight=30, font=("Segoe UI", 10))
-        st.configure("Treeview.Heading", font=("Segoe UI Semibold", 10))
+        bg, card, text, muted, field, border = P["bg"], P["card"], P["text"], P["muted"], P["field"], P["border"]
+        st.configure(".", font=(FONT, 10), background=bg, foreground=text, bordercolor=border, lightcolor=border, darkcolor=border,
+                     troughcolor=bg, fieldbackground=field, selectbackground=P["sel"], selectforeground=text, insertcolor=text)
+        st.configure("TNotebook", background=bg, borderwidth=0, tabmargins=(12, 6, 12, 0))
+        st.configure("TNotebook.Tab", padding=(18, 9), font=(FONT, 10, "bold"), background=bg, foreground=muted, borderwidth=0)
+        st.map("TNotebook.Tab", background=[("selected", card)], foreground=[("selected", BLUE)])
+        st.configure("TFrame", background=bg)
+        st.configure("TLabel", background=bg, foreground=text)
+        st.configure("Card.TLabel", background=card, foreground=text)
+        st.configure("Muted.TLabel", background=card, foreground=muted, font=(FONT, 9))
+        st.configure("H.TLabel", background=card, foreground=text, font=(FONT, 12, "bold"))
+        st.configure("TCheckbutton", background=card, foreground=text, indicatorbackground=field, indicatorforeground=BLUE)
+        st.map("TCheckbutton", background=[("active", card)], indicatorbackground=[("selected", field)])
+        st.configure("TEntry", fieldbackground=field, foreground=text, padding=6)
+        st.configure("TCombobox", fieldbackground=field, background=field, foreground=text, arrowcolor=text, padding=4)
+        st.map("TCombobox", fieldbackground=[("readonly", field)], foreground=[("readonly", text)], selectbackground=[("readonly", field)],
+               selectforeground=[("readonly", text)])
+        self.root.option_add("*TCombobox*Listbox.background", field)
+        self.root.option_add("*TCombobox*Listbox.foreground", text)
+        st.configure("TButton", padding=(12, 7), background=field, foreground=text, borderwidth=0, focusthickness=0)
+        st.map("TButton", background=[("active", P["sel"])])
+        for name, col in (("Accent", BLUE), ("Fox", FOX), ("Purple", PURPLE)):
+            st.configure(f"{name}.TButton", background=col, foreground="white", padding=(14, 8), font=(FONT, 10, "bold"))
+            st.map(f"{name}.TButton", background=[("disabled", mix(col, card, 0.55)), ("active", mix(col, "#000000", 0.15))],
+                   foreground=[("disabled", "#ffffff")])
+        st.configure("Treeview", rowheight=56, font=(FONT, 10), background=card, fieldbackground=card, foreground=text, borderwidth=0)
+        st.map("Treeview", background=[("selected", P["sel"])], foreground=[("selected", text)])
+        st.configure("Apps.Treeview", rowheight=34)
+        st.configure("Treeview.Heading", font=(FONT, 9, "bold"), background=P["head"], foreground=muted, borderwidth=0, padding=6)
+        st.map("Treeview.Heading", background=[("active", P["head"])])
+        st.configure("Vertical.TScrollbar", background=field, troughcolor=card, arrowcolor=muted, borderwidth=0)
+
+    def logo(self, size):
+        key = f"logo{size}"
+        if key not in self.imgs:
+            self.imgs[key] = None
+            if Image is not None:
+                try:
+                    im = Image.open(ICON)
+                    im.size = max(im.info.get("sizes", [(256, 256)]))
+                    self.imgs[key] = ImageTk.PhotoImage(im.convert("RGBA").resize((size, size), Image.LANCZOS))
+                except Exception:  # noqa: BLE001
+                    pass
+        return self.imgs[key]
+
+    def avatar(self, p, size=28):
+        key = f"av{p['id']}{p['label']}{size}"
+        if key in self.imgs or Image is None:
+            return self.imgs.get(key)
+        idx = next((i for i, x in enumerate(self.cfg["persons"]) if x["id"] == p["id"]), 0)
+        s = size * 3
+        im = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        d.ellipse((0, 0, s - 1, s - 1), fill=AVATAR_COLORS[idx % len(AVATAR_COLORS)])
+        letter = (p["label"].strip()[:1] or "?").upper()
+        d.text((s / 2, s / 2), letter, fill="white", font=bold_font(int(s * 0.5)), anchor="mm")
+        self.imgs[key] = ImageTk.PhotoImage(im.resize((size, size), Image.LANCZOS))
+        return self.imgs[key]
+
+    def thumb(self, p, shop_key):
+        """Vorschaubild mit farbigem Shop-Streifen links."""
+        key = f"th{p['aid']}"
+        if key in self.imgs or Image is None:
+            return self.imgs.get(key)
+        w, h = 66, 50
+        im = Image.new("RGBA", (w, h), (0, 0, 0, 0))  # durchsichtig: Zeilenfarbe scheint durch
+        d = ImageDraw.Draw(im)
+        d.rectangle((0, 0, 5, h), fill=SHOP_COLOR.get(shop_key, FOX))
+        d.rounded_rectangle((12, 2, 58, 48), radius=8, fill="#ffffff", outline=P["border"])
+        path = THUMBS / f"{p['aid']}.png"
+        if path.exists():
+            try:
+                pic = Image.open(path).convert("RGBA")
+                pic.thumbnail((40, 40))
+                im.paste(pic, (12 + (46 - pic.width) // 2, 2 + (46 - pic.height) // 2), pic)
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            d.rectangle((26, 15, 44, 33), outline="#c3cbd9", width=2)
+            d.line((26, 21, 44, 21), fill="#c3cbd9", width=2)
+            if p.get("img") and p["aid"] not in self.fetching:
+                self.fetching.add(p["aid"])
+                threading.Thread(target=self.fetch_thumb, args=(p["aid"], p["img"]), daemon=True).start()
+        self.imgs[key] = ImageTk.PhotoImage(im)
+        return self.imgs[key]
+
+    def fetch_thumb(self, aid, url):
+        """Produktbild einmal herunterladen und zwischenspeichern."""
+        try:
+            THUMBS.mkdir(parents=True, exist_ok=True)
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) FoxTestpilot"})
+            data = urllib.request.urlopen(req, timeout=15).read()
+            pic = Image.open(io.BytesIO(data)).convert("RGBA")
+            pic.thumbnail((120, 120))
+            pic.save(THUMBS / f"{aid}.png")
+            self.post(self._thumb_ready, aid)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _thumb_ready(self, aid):
+        self.imgs.pop(f"th{aid}", None)
+        self.render_home()
 
     def card(self, parent, title=None, **pack):
-        f = ttk.Frame(parent, style="Card.TFrame", padding=14)
+        f = tk.Frame(parent, bg=P["card"], highlightthickness=1, highlightbackground=P["border"], padx=16, pady=14)
         f.pack(fill=pack.pop("fill", "x"), expand=pack.pop("expand", False), padx=12, pady=(10, 0), **pack)
         if title:
-            ttk.Label(f, text=title, style="H.TLabel").pack(anchor="w", pady=(0, 6))
+            ttk.Label(f, text=title, style="H.TLabel").pack(anchor="w", pady=(0, 8))
         return f
+
+    def row(self, parent, **pack):
+        r = tk.Frame(parent, bg=P["card"])
+        r.pack(fill="x", **pack)
+        return r
+
+    def text_widget(self, parent, height, mono=False):
+        return tk.Text(parent, height=height, wrap="word", font=("Consolas", 9) if mono else (FONT, 10), relief="flat", bg=P["field"], fg=P["text"],
+                       insertbackground=P["text"], highlightthickness=1, highlightbackground=P["border"], highlightcolor=BLUE, padx=8, pady=6)
 
     def scrollable(self, parent):
         """Bereich mit Bildlaufleiste (für lange Seiten)."""
-        canvas = tk.Canvas(parent, bg=BG, highlightthickness=0)
+        canvas = tk.Canvas(parent, bg=P["bg"], highlightthickness=0)
         sb = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         inner = ttk.Frame(canvas)
         win = canvas.create_window((0, 0), window=inner, anchor="nw")
@@ -262,8 +434,9 @@ class App:
     def two_columns(parent, left_weight=3, right_weight=2, right_min=400):
         cols = ttk.Frame(parent)
         cols.pack(fill="both", expand=True)
-        cols.columnconfigure(0, weight=left_weight, uniform="c" if left_weight == right_weight else "")
-        cols.columnconfigure(1, weight=right_weight, minsize=right_min, uniform="c" if left_weight == right_weight else "")
+        same = left_weight == right_weight
+        cols.columnconfigure(0, weight=left_weight, uniform="c" if same else "")
+        cols.columnconfigure(1, weight=right_weight, minsize=right_min, uniform="c" if same else "")
         left, right = ttk.Frame(cols), ttk.Frame(cols)
         left.grid(row=0, column=0, sticky="nsew")
         right.grid(row=0, column=1, sticky="nsew")
@@ -271,30 +444,27 @@ class App:
 
     # ---------- Oberfläche ----------
     def build(self):
-        top = tk.Frame(self.root, bg=BG)
-        top.pack(fill="x", padx=12, pady=(10, 0))
-        tk.Label(top, text="🦊 Fox Testpilot", font=("Segoe UI Semibold", 17), bg=BG).pack(side="left")
-        self.btn_check = ttk.Button(top, text="🔍 Jetzt prüfen", style="Accent.TButton", command=lambda: self.check(True))
+        top = tk.Frame(self.main, bg=P["bg"])
+        top.pack(fill="x", padx=16, pady=(12, 0))
+        lg = self.logo(40)
+        if lg:
+            tk.Label(top, image=lg, bg=P["bg"]).pack(side="left")
+        tk.Label(top, text="Fox Testpilot", font=(FONT, 18, "bold"), bg=P["bg"], fg=P["text"]).pack(side="left", padx=(8, 20))
+        self.chips = tk.Frame(top, bg=P["bg"])
+        self.chips.pack(side="left")
+        self.btn_check = ttk.Button(top, text="Läuft …" if self._busy else "Jetzt prüfen", style="Accent.TButton", command=lambda: self.check(True))
         self.btn_check.pack(side="right")
-        self.upd = ttk.Button(top, text="⬆️ Update", style="Fox.TButton", command=self.install_update)
-        tk.Label(top, text="   Person:", bg=BG, font=("Segoe UI", 10)).pack(side="left")
-        self.var_person = tk.StringVar()
-        self.cb_person = ttk.Combobox(top, textvariable=self.var_person, state="readonly", width=16)
-        self.cb_person.pack(side="left", padx=6)
-        self.cb_person.bind("<<ComboboxSelected>>", lambda _e: self.select_person())
+        self.upd = ttk.Button(top, text="Update", style="Fox.TButton", command=self.install_update)
+        if self.update_url:
+            self.upd.configure(text="Update installieren")
+            self.upd.pack(side="right", padx=8)
 
-        self.nb = ttk.Notebook(self.root)
-        self.nb.pack(fill="both", expand=True, padx=8, pady=8)
-        self.tab_home = ttk.Frame(self.nb)
-        self.tab_apps = ttk.Frame(self.nb)
-        self.tab_people = ttk.Frame(self.nb)
-        self.tab_set = ttk.Frame(self.nb)
-        self.tab_log = ttk.Frame(self.nb)
-        self.nb.add(self.tab_home, text="🏠 Start")
-        self.nb.add(self.tab_apps, text="📋 Bewerbungen")
-        self.nb.add(self.tab_people, text="👥 Personen")
-        self.nb.add(self.tab_set, text="⚙️ Einstellungen")
-        self.nb.add(self.tab_log, text="📜 Verlauf")
+        self.nb = ttk.Notebook(self.main)
+        self.nb.pack(fill="both", expand=True, padx=4, pady=(10, 8))
+        self.tab_home, self.tab_apps, self.tab_people, self.tab_set, self.tab_log = (ttk.Frame(self.nb) for _ in range(5))
+        for tab, name in ((self.tab_home, "Start"), (self.tab_apps, "Bewerbungen"), (self.tab_people, "Personen"),
+                          (self.tab_set, "Einstellungen"), (self.tab_log, "Verlauf")):
+            self.nb.add(tab, text=name)
         self.build_home()
         self.build_apps()
         self.build_people()
@@ -303,195 +473,242 @@ class App:
 
     def build_home(self):
         t = self.tab_home
-        self.hero = tk.Frame(t, bg=HERO["none"], padx=20, pady=16)
+        col = HERO["none"]
+        self.hero = tk.Frame(t, bg=col, padx=24, pady=14)
         self.hero.pack(fill="x", padx=12, pady=(10, 0))
-        self.h_last = tk.Label(self.hero, text="Noch nicht geprüft", bg=HERO["none"], fg="#e8ecff", font=("Segoe UI", 9))
+        self.h_last = tk.Label(self.hero, text="Noch nicht geprüft", bg=col, fg="#e8ecff", font=(FONT, 9))
         self.h_last.pack(anchor="w")
-        self.h_title = tk.Label(self.hero, text="Testpiloten", bg=HERO["none"], fg="white", font=("Segoe UI Semibold", 20))
+        self.h_title = tk.Label(self.hero, text="Testpiloten", bg=col, fg="white", font=(FONT, 21, "bold"))
         self.h_title.pack(anchor="w")
-        self.h_sub = tk.Label(self.hero, text="", bg=HERO["none"], fg="white", font=("Segoe UI", 11))
+        self.h_sub = tk.Label(self.hero, text="", bg=col, fg="white", font=(FONT, 11))
         self.h_sub.pack(anchor="w")
-        self.h_cd = tk.Label(self.hero, text="", bg=HERO["none"], fg="white", font=("Segoe UI Semibold", 22))
-        self.h_cd.pack(anchor="w", pady=(6, 0))
+        self.tiles = tk.Frame(self.hero, bg=col)
+        self.h_tlabel = tk.Label(self.tiles, text="", bg=col, fg="white", font=(FONT, 9, "bold"))
+        self.h_tlabel.pack(anchor="w", pady=(8, 4))
+        self.tile_row = tk.Frame(self.tiles, bg=col)
+        self.tile_row.pack(anchor="w")
+        self.tile_boxes = []
+        for unit in ("Tage", "Std.", "Min.", "Sek."):
+            box = tk.Frame(self.tile_row, bg=col, width=84, height=64)
+            box.pack(side="left", padx=(0, 8))
+            box.pack_propagate(False)
+            v = tk.Label(box, text="0", bg=col, fg="white", font=(FONT, 21, "bold"))
+            v.pack(pady=(4, 0))
+            u = tk.Label(box, text=unit, bg=col, fg="#f4f4ff", font=(FONT, 9))
+            u.pack()
+            self.tile_boxes.append((box, v, u))
 
-        c = self.card(t, "Testprodukte", fill="both", expand=True)
-        self.shoplines = ttk.Label(c, text="", style="Card.TLabel", justify="left")
-        self.shoplines.pack(anchor="w", pady=(0, 6))
-        cols = ("auto", "shop", "name", "status", "who")
-        self.tree = ttk.Treeview(c, columns=cols, show="headings", height=9, selectmode="browse")
-        for col, txt, w, anchor in (("auto", "Auto", 60, "center"), ("shop", "Shop", 100, "w"), ("name", "Produkt", 420, "w"),
-                                    ("status", "Status", 140, "w"), ("who", "Beworben", 180, "w")):
-            self.tree.heading(col, text=txt)
-            self.tree.column(col, width=w, anchor=anchor, stretch=(col == "name"))
+        c = self.card(t, None, fill="both", expand=True)
+        head = self.row(c)
+        ttk.Label(head, text="Testprodukte", style="H.TLabel").pack(side="left")
+        for name, sc in (("Saturn", SHOP_COLOR["saturn"]), ("MediaMarkt", SHOP_COLOR["mm"])):
+            tk.Label(head, text=name, fg=P["muted"], bg=P["card"], font=(FONT, 9)).pack(side="right", padx=(0, 12))
+            tk.Frame(head, bg=sc, width=6, height=14).pack(side="right", padx=(0, 4))
+        self.shoplines = self.row(c, pady=(4, 8))
+        self.customlines = tk.Frame(c, bg=P["card"])
+        self.customlines.pack(side="bottom", fill="x", pady=(8, 0))
+        r2 = tk.Frame(c, bg=P["card"])
+        r2.pack(side="bottom", fill="x", pady=(8, 0))
+        r = tk.Frame(c, bg=P["card"])
+        r.pack(side="bottom", fill="x", pady=(10, 0))
+        tf = tk.Frame(c, bg=P["card"], highlightthickness=1, highlightbackground=P["border"])
+        tf.pack(fill="both", expand=True)
+        cols = ("auto", "name", "status", "who")
+        self.tree = ttk.Treeview(tf, columns=cols, show="tree headings", height=3, selectmode="browse")
+        self.tree.heading("#0", text="")
+        self.tree.column("#0", width=80, stretch=False)
+        for col_, txt, w, anchor in (("auto", "AUTO", 64, "center"), ("name", "PRODUKT", 430, "w"), ("status", "STATUS", 140, "w"), ("who", "BEWORBEN", 170, "w")):
+            self.tree.heading(col_, text=txt, anchor=anchor)
+            self.tree.column(col_, width=w, anchor=anchor, stretch=(col_ == "name"))
+        self.tree.tag_configure("done", background=P["done"])
+        self.tree.tag_configure("win", background=P["win"])
+        self.tree.tag_configure("lost", background=P["lost"], foreground=P["muted"])
         self.tree.tag_configure("new", foreground=FOX)
+        sb = ttk.Scrollbar(tf, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<Button-1>", self.tree_click)
         self.tree.bind("<Double-1>", lambda _e: self.apply_selected())
-        row = ttk.Frame(c, style="Card.TFrame")
-        row.pack(fill="x", pady=(8, 0))
-        ttk.Button(row, text="✍️ Bewerben (Browser mit Ausfüllen)", style="Accent.TButton", command=self.apply_selected).pack(side="left")
-        ttk.Button(row, text="✓ Beworben an/aus", command=self.toggle_applied).pack(side="left", padx=6)
-        ttk.Button(row, text="Seite öffnen", command=self.open_selected_page).pack(side="left")
+        ttk.Button(r, text="Bewerben mit Ausfüll-Hilfe", style="Accent.TButton", command=self.apply_selected).pack(side="left")
+        ttk.Button(r, text="Beworben an/aus", command=self.toggle_applied).pack(side="left", padx=6)
+        ttk.Button(r, text="Seite öffnen", command=self.open_selected_page).pack(side="left")
         self.var_probe = tk.BooleanVar(value=self.cfg.get("probe", True))
-        ttk.Checkbutton(row, text="🧪 Probelauf (nichts abschicken)", variable=self.var_probe, command=self.save_probe).pack(side="right")
-        row2 = ttk.Frame(c, style="Card.TFrame")
-        row2.pack(fill="x", pady=(8, 0))
-        self.btn_auto = ttk.Button(row2, text="🤖 Auto", style="Fox.TButton", command=lambda: self.start_queue(False))
+        ttk.Checkbutton(r, text="Probelauf (nichts abschicken)", variable=self.var_probe, command=self.save_probe).pack(side="right")
+        self.btn_auto = ttk.Button(r2, text="Auto", style="Fox.TButton", command=lambda: self.start_queue(False))
         self.btn_auto.pack(side="left")
-        self.btn_all = ttk.Button(row2, text="👥 Alle Personen", style="Purple.TButton", command=lambda: self.start_queue(True))
+        self.btn_all = ttk.Button(r2, text="Alle Personen", style="Purple.TButton", command=lambda: self.start_queue(True))
         self.btn_all.pack(side="left", padx=6)
-        self.lbl_progress = ttk.Label(row2, text="Tipp: In der Spalte „Auto“ Produkte anklicken, dann einen der Knöpfe.", style="Muted.TLabel")
+        self.lbl_progress = ttk.Label(r2, text="Tipp: In der Spalte „Auto“ Produkte anklicken, dann einen der farbigen Knöpfe.", style="Muted.TLabel")
         self.lbl_progress.pack(side="left", padx=8)
-        self.customlines = ttk.Label(c, text="", style="Card.TLabel", justify="left")
-        self.customlines.pack(anchor="w", pady=(8, 0))
 
     def build_apps(self):
         c = self.card(self.tab_apps, "Meine Bewerbungen", fill="both", expand=True)
-        ttk.Label(c, text="Trag ein, ob du ausgewählt wurdest. Bei „Ausgewählt“ die Frist für die Bewertung eintragen – die App erinnert 3 Tage vorher und am letzten Tag (wenn sie läuft).",
+        ttk.Label(c, text="Trag ein, ob du ausgewählt wurdest. Bei „Ausgewählt“ die Frist für die Bewertung eintragen – das Programm erinnert 3 Tage vorher und am letzten Tag.",
                   style="Muted.TLabel", wraplength=900).pack(anchor="w", pady=(0, 8))
+        tf = tk.Frame(c, bg=P["card"], highlightthickness=1, highlightbackground=P["border"])
+        tf.pack(fill="both", expand=True)
         cols = ("name", "shop", "date", "result", "due")
-        self.atree = ttk.Treeview(c, columns=cols, show="headings", height=14, selectmode="browse")
-        for col, txt, w in (("name", "Produkt", 420), ("shop", "Shop", 110), ("date", "Beworben am", 110), ("result", "Ergebnis", 150), ("due", "Bewertung bis", 120)):
-            self.atree.heading(col, text=txt)
+        self.atree = ttk.Treeview(tf, columns=cols, show="headings", height=10, selectmode="browse", style="Apps.Treeview")
+        for col, txt, w in (("name", "PRODUKT", 420), ("shop", "SHOP", 110), ("date", "BEWORBEN AM", 110), ("result", "ERGEBNIS", 150), ("due", "BEWERTUNG BIS", 120)):
+            self.atree.heading(col, text=txt, anchor="w")
             self.atree.column(col, width=w, stretch=(col == "name"))
+        self.atree.tag_configure("win", background=P["win"])
+        self.atree.tag_configure("lost", background=P["lost"], foreground=P["muted"])
         self.atree.pack(fill="both", expand=True)
         self.atree.bind("<<TreeviewSelect>>", lambda _e: self.app_selected())
-        row = ttk.Frame(c, style="Card.TFrame")
-        row.pack(fill="x", pady=(8, 0))
+        r = self.row(c, pady=(10, 0))
         self.var_result = tk.StringVar()
-        ttk.Combobox(row, textvariable=self.var_result, state="readonly", width=18, values=["⏳ Noch offen", "🎉 Ausgewählt", "Nicht ausgewählt"]).pack(side="left")
-        ttk.Label(row, text="  Bewertung bis (TT.MM.JJJJ):", style="Card.TLabel").pack(side="left")
+        ttk.Combobox(r, textvariable=self.var_result, state="readonly", width=18, values=["Noch offen", "Ausgewählt", "Nicht ausgewählt"]).pack(side="left")
+        ttk.Label(r, text="   Bewertung bis (TT.MM.JJJJ):", style="Card.TLabel").pack(side="left")
         self.var_due = tk.StringVar()
-        ttk.Entry(row, textvariable=self.var_due, width=12).pack(side="left", padx=6)
-        ttk.Button(row, text="Übernehmen", style="Accent.TButton", command=self.save_result).pack(side="left")
-        ttk.Button(row, text="🗑️ Eintrag löschen", command=self.delete_app).pack(side="right")
+        ttk.Entry(r, textvariable=self.var_due, width=12).pack(side="left", padx=6)
+        ttk.Button(r, text="Übernehmen", style="Accent.TButton", command=self.save_result).pack(side="left")
+        ttk.Button(r, text="Eintrag löschen", command=self.delete_app).pack(side="right")
 
     def build_people(self):
         outer = self.scrollable(self.tab_people)
-        row = self.card(outer)
-        ttk.Label(row, text="Jede Person im Haushalt hat eigene Daten, eigene Konten und ein eigenes Browser-Profil. Oben rechts wechselst du die Person.",
+        c = self.card(outer)
+        ttk.Label(c, text="Jede Person im Haushalt hat eigene Daten, eigene Konten und ein eigenes Browser-Profil. Oben neben dem Logo wechselst du die Person.",
                   style="Muted.TLabel", wraplength=900).pack(anchor="w")
-        br = ttk.Frame(row, style="Card.TFrame")
-        br.pack(anchor="w", pady=(8, 0))
-        ttk.Button(br, text="➕ Neue Person", command=self.add_person).pack(side="left")
-        ttk.Button(br, text="✏️ Umbenennen", command=self.rename_person).pack(side="left", padx=6)
-        ttk.Button(br, text="🗑️ Person löschen", command=self.delete_person).pack(side="left")
+        br = self.row(c, pady=(10, 0))
+        ttk.Button(br, text="+ Neue Person", style="Accent.TButton", command=self.add_person).pack(side="left")
+        ttk.Button(br, text="Umbenennen", command=self.rename_person).pack(side="left", padx=6)
+        ttk.Button(br, text="Person löschen", command=self.delete_person).pack(side="left")
 
         lcol, rcol = self.two_columns(outer, 3, 2, 400)
-        left = self.card(lcol, "✍️ Daten zum Ausfüllen", fill="both", expand=True)
+        left = self.card(lcol, "Daten zum Ausfüllen", fill="both", expand=True)
         self.pv = {}
-        grid = ttk.Frame(left, style="Card.TFrame")
+        grid = tk.Frame(left, bg=P["card"])
         grid.pack(fill="x")
         grid.columnconfigure(1, weight=1)
         fields = [("salutation", "Anrede (Herr/Frau)"), ("first", "Vorname"), ("last", "Nachname"), ("street", "Straße"), ("nr", "Hausnummer"),
                   ("zip", "PLZ"), ("city", "Ort"), ("email", "E-Mail (falls kein Konto)"), ("phone", "Telefon"), ("birth", "Geburtsdatum TT.MM.JJJJ")]
         for i, (k, label) in enumerate(fields):
-            ttk.Label(grid, text=label, style="Card.TLabel").grid(row=i, column=0, sticky="w", pady=2)
+            ttk.Label(grid, text=label, style="Card.TLabel").grid(row=i, column=0, sticky="w", pady=3)
             v = tk.StringVar()
             self.pv[k] = v
-            ttk.Entry(grid, textvariable=v, width=24).grid(row=i, column=1, sticky="we", pady=2, padx=(8, 0))
-        ttk.Label(left, text="Bewerbungstext ({produkt} = Produktname):", style="Card.TLabel").pack(anchor="w", pady=(8, 2))
-        self.txt_main = tk.Text(left, height=4, wrap="word", font=("Segoe UI", 10), relief="solid", bd=1)
+            ttk.Entry(grid, textvariable=v, width=24).grid(row=i, column=1, sticky="we", pady=3, padx=(10, 0))
+        ttk.Label(left, text="Bewerbungstext  ({produkt} = Produktname)", style="Card.TLabel").pack(anchor="w", pady=(10, 4))
+        self.txt_main = self.text_widget(left, 4)
         self.txt_main.pack(fill="x")
-        ttk.Label(left, text="Eigene Texte je Stichwort (z. B. „tv, fernseher“):", style="Card.TLabel").pack(anchor="w", pady=(8, 2))
+        ttk.Label(left, text="Eigene Texte je Stichwort (z. B. „tv, fernseher“)", style="Card.TLabel").pack(anchor="w", pady=(10, 2))
         self.kw = []
         for _ in range(3):
             v = tk.StringVar()
-            ttk.Entry(left, textvariable=v).pack(fill="x", pady=(2, 0))
-            tx = tk.Text(left, height=2, wrap="word", font=("Segoe UI", 10), relief="solid", bd=1)
-            tx.pack(fill="x", pady=(2, 4))
+            ttk.Entry(left, textvariable=v).pack(fill="x", pady=(4, 0))
+            tx = self.text_widget(left, 2)
+            tx.pack(fill="x", pady=(4, 4))
             self.kw.append((v, tx))
-        ttk.Button(left, text="💾 Daten speichern", style="Accent.TButton", command=self.save_profile).pack(anchor="w", pady=(6, 0))
+        ttk.Button(left, text="Daten speichern", style="Accent.TButton", command=self.save_profile).pack(anchor="w", pady=(8, 0))
 
-        right = self.card(rcol, "🔑 Konten", fill="both", expand=True)
-        ttk.Label(right, text="Die App meldet die Person damit automatisch an. Passwörter werden mit Windows verschlüsselt und nur für deinen Windows-Benutzer gespeichert.",
+        right = self.card(rcol, "Konten", fill="both", expand=True)
+        ttk.Label(right, text="Das Programm meldet die Person damit automatisch an. Passwörter werden mit Windows verschlüsselt und nur für deinen Windows-Benutzer gespeichert.",
                   style="Muted.TLabel", wraplength=330).pack(anchor="w", pady=(0, 6))
         self.acc = {}
         for s in SHOPS:
-            ttk.Label(right, text=("myMediaMarkt" if s["key"] == "mm" else "mySaturn"), style="H.TLabel").pack(anchor="w", pady=(8, 2))
-            e, p = tk.StringVar(), tk.StringVar()
-            ttk.Label(right, text="E-Mail", style="Card.TLabel").pack(anchor="w")
+            hdr = tk.Frame(right, bg=P["card"])
+            hdr.pack(anchor="w", pady=(12, 4))
+            tk.Frame(hdr, bg=SHOP_COLOR[s["key"]], width=6, height=18).pack(side="left", padx=(0, 8))
+            ttk.Label(hdr, text=("myMediaMarkt" if s["key"] == "mm" else "mySaturn"), style="H.TLabel").pack(side="left")
+            e, pw = tk.StringVar(), tk.StringVar()
+            ttk.Label(right, text="E-Mail", style="Muted.TLabel").pack(anchor="w")
             ttk.Entry(right, textvariable=e).pack(fill="x")
-            lbl = ttk.Label(right, text="Passwort", style="Card.TLabel")
-            lbl.pack(anchor="w")
-            ttk.Entry(right, textvariable=p, show="•").pack(fill="x")
-            r = ttk.Frame(right, style="Card.TFrame")
-            r.pack(fill="x", pady=(4, 0))
+            lbl = ttk.Label(right, text="Passwort", style="Muted.TLabel")
+            lbl.pack(anchor="w", pady=(4, 0))
+            ttk.Entry(right, textvariable=pw, show="•").pack(fill="x")
+            r = self.row(right, pady=(6, 0))
             ttk.Button(r, text="Speichern", style="Accent.TButton", command=lambda k=s["key"]: self.save_account(k)).pack(side="left")
             ttk.Button(r, text="Anmelden", command=lambda u=s["account"]: self.open_browser(u)).pack(side="left", padx=6)
             st = ttk.Label(right, text="", style="Card.TLabel")
             st.pack(anchor="w")
-            self.acc[s["key"]] = (e, p, lbl, st)
-        ttk.Button(right, text="🔎 Anmelde-Status prüfen", command=self.check_login).pack(anchor="w", pady=(12, 0))
+            self.acc[s["key"]] = (e, pw, lbl, st)
+        ttk.Button(right, text="Anmelde-Status prüfen", command=self.check_login).pack(anchor="w", pady=(12, 0))
 
     def build_settings(self):
         outer = self.scrollable(self.tab_set)
         left, right = self.two_columns(outer, 1, 1, 0)
 
-        c = self.card(left, "🔔 Meldungen")
-        r = ttk.Frame(c, style="Card.TFrame")
-        r.pack(fill="x")
+        c = self.card(left, "Meldungen")
+        r = self.row(c)
         ttk.Label(r, text="Prüfen alle", style="Card.TLabel").pack(side="left")
         self.var_interval = tk.StringVar(value=next((k for k, v in INTERVALS.items() if v == self.cfg.get("interval", 30)), "30 Minuten"))
         cb = ttk.Combobox(r, textvariable=self.var_interval, values=list(INTERVALS), state="readonly", width=12)
         cb.pack(side="left", padx=8)
         cb.bind("<<ComboboxSelected>>", lambda _e: self.set_cfg("interval", INTERVALS[self.var_interval.get()]))
         self.var_alarm = tk.BooleanVar(value=self.cfg.get("alarm", False))
-        ttk.Checkbutton(c, text="🔊 Lauter Alarm, wenn die Bewerbung startet", variable=self.var_alarm,
-                        command=lambda: self.set_cfg("alarm", self.var_alarm.get())).pack(anchor="w", pady=(6, 0))
+        ttk.Checkbutton(c, text="Lauter Alarm, wenn die Bewerbung startet", variable=self.var_alarm,
+                        command=lambda: self.set_cfg("alarm", self.var_alarm.get())).pack(anchor="w", pady=(8, 0))
         self.var_auto = tk.BooleanVar(value=self.cfg.get("autostart", False))
-        ttk.Checkbutton(c, text="🚀 Mit Windows starten (läuft dann unten rechts neben der Uhr)", variable=self.var_auto, command=self.set_autostart).pack(anchor="w")
-        ttk.Button(c, text="🔔 Test-Benachrichtigung", command=lambda: notify("🦊 Fox Testpilot", "Benachrichtigungen funktionieren!", discord=False)).pack(anchor="w", pady=(6, 0))
+        ttk.Checkbutton(c, text="Mit Windows starten (läuft dann unten rechts neben der Uhr)", variable=self.var_auto, command=self.set_autostart).pack(anchor="w", pady=(2, 0))
+        ttk.Button(c, text="Test-Benachrichtigung", command=lambda: notify("🦊 Fox Testpilot", "Benachrichtigungen funktionieren!", discord=False)).pack(anchor="w", pady=(10, 0))
 
-        c = self.card(left, "💬 Discord")
+        c = self.card(left, "Aussehen")
+        r = self.row(c)
+        ttk.Label(r, text="Hell oder dunkel", style="Card.TLabel").pack(side="left")
+        self.var_theme = tk.StringVar(value=next((k for k, v in THEMES.items() if v == self.cfg.get("theme", "auto")), "Automatisch"))
+        cb = ttk.Combobox(r, textvariable=self.var_theme, values=list(THEMES), state="readonly", width=14)
+        cb.pack(side="left", padx=8)
+        cb.bind("<<ComboboxSelected>>", lambda _e: self.set_theme(THEMES[self.var_theme.get()]))
+        ttk.Label(c, text="„Automatisch“ folgt der Windows-Einstellung.", style="Muted.TLabel").pack(anchor="w", pady=(6, 0))
+
+        c = self.card(left, "Discord")
         ttk.Label(c, text="Webhook-Adresse (Discord: Kanal bearbeiten → Integrationen → Webhooks → Neuer Webhook → URL kopieren):",
                   style="Muted.TLabel", wraplength=420).pack(anchor="w")
         self.var_dc = tk.StringVar()
-        ttk.Entry(c, textvariable=self.var_dc, show="•").pack(fill="x", pady=(4, 0))
-        r = ttk.Frame(c, style="Card.TFrame")
-        r.pack(fill="x", pady=(6, 0))
+        ttk.Entry(c, textvariable=self.var_dc, show="•").pack(fill="x", pady=(6, 0))
+        r = self.row(c, pady=(8, 0))
         ttk.Button(r, text="Speichern", style="Accent.TButton", command=self.save_discord).pack(side="left")
         ttk.Button(r, text="Test senden", command=self.test_discord).pack(side="left", padx=6)
         self.lbl_dc = ttk.Label(r, text="", style="Card.TLabel")
         self.lbl_dc.pack(side="left")
         self.var_dcon = tk.BooleanVar(value=self.cfg.get("discordOn", False))
-        ttk.Checkbutton(c, text="Meldungen an Discord senden", variable=self.var_dcon, command=lambda: self.set_cfg("discordOn", self.var_dcon.get())).pack(anchor="w", pady=(6, 0))
+        ttk.Checkbutton(c, text="Meldungen an Discord senden", variable=self.var_dcon, command=lambda: self.set_cfg("discordOn", self.var_dcon.get())).pack(anchor="w", pady=(8, 0))
         self.var_dcping = tk.BooleanVar(value=self.cfg.get("discordPing", False))
-        ttk.Checkbutton(c, text="📣 Beim Start @everyone erwähnen", variable=self.var_dcping, command=lambda: self.set_cfg("discordPing", self.var_dcping.get())).pack(anchor="w")
+        ttk.Checkbutton(c, text="Beim Start @everyone erwähnen", variable=self.var_dcping, command=lambda: self.set_cfg("discordPing", self.var_dcping.get())).pack(anchor="w", pady=(2, 0))
 
-        c = self.card(right, "🌐 Eigene Seiten")
+        c = self.card(right, "Eigene Seiten")
         ttk.Label(c, text="Weitere Produkttester-Seiten: Meldung, sobald eines der Stichwörter neu auf der Seite steht.", style="Muted.TLabel", wraplength=420).pack(anchor="w")
-        self.lst_custom = tk.Listbox(c, height=4, font=("Segoe UI", 10), relief="solid", bd=1)
-        self.lst_custom.pack(fill="x", pady=(6, 4))
-        g = ttk.Frame(c, style="Card.TFrame")
+        self.lst_custom = tk.Listbox(c, height=4, font=(FONT, 10), relief="flat", bg=P["field"], fg=P["text"], selectbackground=P["sel"], selectforeground=P["text"],
+                                     highlightthickness=1, highlightbackground=P["border"], activestyle="none")
+        self.lst_custom.pack(fill="x", pady=(8, 6))
+        g = tk.Frame(c, bg=P["card"])
         g.pack(fill="x")
         g.columnconfigure(1, weight=1)
         self.var_cn, self.var_cu, self.var_ck = tk.StringVar(), tk.StringVar(), tk.StringVar()
         for i, (lbl, v) in enumerate((("Name", self.var_cn), ("Adresse", self.var_cu), ("Stichwörter", self.var_ck))):
             ttk.Label(g, text=lbl, style="Card.TLabel").grid(row=i, column=0, sticky="w")
-            ttk.Entry(g, textvariable=v, width=20).grid(row=i, column=1, sticky="we", padx=(8, 0), pady=1)
-        r = ttk.Frame(c, style="Card.TFrame")
-        r.pack(fill="x", pady=(6, 0))
-        ttk.Button(r, text="➕ Hinzufügen", style="Accent.TButton", command=self.add_custom).pack(side="left")
-        ttk.Button(r, text="🗑️ Markierte entfernen", command=self.remove_custom).pack(side="left", padx=6)
+            ttk.Entry(g, textvariable=v, width=20).grid(row=i, column=1, sticky="we", padx=(10, 0), pady=2)
+        r = self.row(c, pady=(8, 0))
+        ttk.Button(r, text="+ Hinzufügen", style="Accent.TButton", command=self.add_custom).pack(side="left")
+        ttk.Button(r, text="Markierte entfernen", command=self.remove_custom).pack(side="left", padx=6)
 
-        c = self.card(right, "💾 Sicherung · 🔍 Diagnose")
+        c = self.card(right, "Sicherung")
         ttk.Label(c, text="Die Sicherung aus der Android-App (Einstellungen → Sicherung) kannst du hier einspielen – Personen, Daten, Texte und Häkchen. Passwörter musst du neu eintragen.",
                   style="Muted.TLabel", wraplength=420).pack(anchor="w")
-        r = ttk.Frame(c, style="Card.TFrame")
-        r.pack(fill="x", pady=(6, 0))
-        ttk.Button(r, text="📥 Sicherung einspielen", command=self.import_backup).pack(side="left")
-        ttk.Button(r, text="📋 Sicherung kopieren", command=self.export_backup).pack(side="left", padx=6)
-        ttk.Label(c, text="Diagnose: zeigt, was das Programm auf den Testpiloten-Seiten liest.", style="Muted.TLabel", wraplength=420).pack(anchor="w", pady=(10, 0))
-        ttk.Button(c, text="🔍 Seiten testen", command=self.diagnose).pack(anchor="w", pady=(4, 0))
+        r = self.row(c, pady=(8, 0))
+        ttk.Button(r, text="Sicherung einspielen", command=self.import_backup).pack(side="left")
+        ttk.Button(r, text="Sicherung kopieren", command=self.export_backup).pack(side="left", padx=6)
+
+        c = self.card(right, "Diagnose")
+        ttk.Label(c, text="Zeigt, was das Programm auf den Testpiloten-Seiten liest. Bei Problemen den Bericht kopieren und an Claude schicken.",
+                  style="Muted.TLabel", wraplength=420).pack(anchor="w")
+        ttk.Button(c, text="Seiten testen", command=self.diagnose).pack(anchor="w", pady=(8, 0))
 
     def build_log(self):
         c = self.card(self.tab_log, "Verlauf", fill="both", expand=True)
-        self.histbox = tk.Text(c, height=12, wrap="word", font=("Segoe UI", 10), relief="flat", bg="#f7f9fd")
+        self.histbox = self.text_widget(c, 12)
         self.histbox.pack(fill="both", expand=True)
-        ttk.Label(c, text="Technisches Protokoll", style="H.TLabel").pack(anchor="w", pady=(10, 4))
-        self.logbox = tk.Text(c, height=8, wrap="word", font=("Consolas", 9), relief="flat", bg="#f7f9fd", state="disabled")
+        ttk.Label(c, text="Technisches Protokoll", style="H.TLabel").pack(anchor="w", pady=(12, 6))
+        self.logbox = self.text_widget(c, 8, mono=True)
+        self.logbox.configure(state="disabled")
         self.logbox.pack(fill="both", expand=True)
+
+    def set_theme(self, t):
+        self.set_cfg("theme", t)
+        tab = self.nb.index(self.nb.select())
+        self.rebuild()
+        self.nb.select(tab)
 
     # ---------- Anzeigen ----------
     def render_all(self):
@@ -503,18 +720,29 @@ class App:
         self.render_history()
 
     def render_people(self):
-        names = [p["label"] for p in self.cfg["persons"]]
-        self.cb_person.configure(values=names)
-        self.var_person.set(self.me()["label"])
+        for w in self.chips.winfo_children():
+            w.destroy()
+        for p in self.cfg["persons"]:
+            on = p["id"] == self.cfg["active"]
+            chip = tk.Label(self.chips, image=self.avatar(p), text="  " + p["label"], compound="left", font=(FONT, 10, "bold" if on else "normal"),
+                            bg=P["card"] if on else P["bg"], fg=P["text"], padx=8, pady=4, cursor="hand2",
+                            highlightthickness=2, highlightbackground=BLUE if on else P["border"])
+            chip.pack(side="left", padx=(0, 6))
+            chip.bind("<Button-1>", lambda _e, pid=p["id"]: self.select_person(pid))
+        if len(self.cfg["persons"]) < 6:
+            add = tk.Label(self.chips, text="+", font=(FONT, 14, "bold"), bg=P["bg"], fg=P["muted"], padx=12, cursor="hand2",
+                           highlightthickness=2, highlightbackground=P["border"])
+            add.pack(side="left")
+            add.bind("<Button-1>", lambda _e: self.add_person())
 
     def status_of(self, aid):
         me = self.me()
         r = (me.get("info", {}).get(aid) or {}).get("result")
         if r == "yes":
-            return "🎉 Ausgewählt"
+            return "Ausgewählt", "win"
         if r == "no":
-            return "Nicht ausgewählt"
-        return "✓ Beworben" if aid in me.get("applied", {}) else "Offen"
+            return "Nicht ausgewählt", "lost"
+        return ("✓ Beworben", "done") if aid in me.get("applied", {}) else ("Offen", "")
 
     def shops(self):
         return (self.cfg.get("last") or {}).get("shops", [])
@@ -522,24 +750,37 @@ class App:
     def render_home(self):
         last = self.cfg.get("last") or {}
         lst = self.shops()
-        self.shoplines.configure(text="\n".join(f"{s['name']}:  {shop_line(s)}" for s in lst) or "Noch nicht geprüft")
+        for w in self.shoplines.winfo_children():
+            w.destroy()
+        for s in lst:
+            r = self.row(self.shoplines, pady=1)
+            tk.Frame(r, bg=SHOP_COLOR.get(s.get("key"), P["muted"]), width=6, height=14).pack(side="left", padx=(0, 6))
+            tk.Label(r, text=s["name"], fg=P["text"], bg=P["card"], font=(FONT, 10, "bold")).pack(side="left", padx=(0, 8))
+            tk.Label(r, text=plain(shop_line(s)), fg=P["muted"], bg=P["card"], font=(FONT, 10)).pack(side="left")
+        if not lst:
+            tk.Label(self.shoplines, text="Noch nicht geprüft", fg=P["muted"], bg=P["card"]).pack(anchor="w")
         sel = self.tree.selection()
         self.tree.delete(*self.tree.get_children())
         for s in lst:
             for p in s.get("products", []):
                 who = ", ".join(x["label"] for x in self.cfg["persons"] if p["aid"] in x.get("applied", {}))
-                self.tree.insert("", "end", iid=p["aid"], values=("☑" if p["aid"] in self.sel else "☐", s["name"], p["name"] + ("  · NEU" if p.get("isNew") else ""),
-                                                                  self.status_of(p["aid"]), who), tags=("new",) if p.get("isNew") else ())
+                st, tag = self.status_of(p["aid"])
+                tags = tuple(t for t in (tag, "new" if p.get("isNew") else "") if t)
+                self.tree.insert("", "end", iid=p["aid"], image=self.thumb(p, s["key"]) or "",
+                                 values=("☑" if p["aid"] in self.sel else "☐", p["name"] + ("   · NEU" if p.get("isNew") else ""), st, who), tags=tags)
         if sel and self.tree.exists(sel[0]):
             self.tree.selection_set(sel[0])
+        for w in self.customlines.winfo_children():
+            w.destroy()
         res = {x["id"]: x for x in last.get("custom", [])}
-        lines = []
         for p in self.cfg.get("custom", []):
             r = res.get(p["id"], {})
             f = r.get("found") or []
-            lines.append(f"🌐 {p['name']}:  " + (("⚠️ " + r["error"]) if r.get("error") else "noch nicht geprüft" if not r else
-                                                ("🔔 gefunden: „" + "“, „".join(f) + "“") if f else "keines der Stichwörter"))
-        self.customlines.configure(text="\n".join(lines))
+            line = ("Fehler: " + r["error"]) if r.get("error") else "noch nicht geprüft" if not r else ("gefunden: „" + "“, „".join(f) + "“") if f else "keines der Stichwörter auf der Seite"
+            row = self.row(self.customlines, pady=1)
+            tk.Frame(row, bg=GREEN if f else P["border"], width=6, height=14).pack(side="left", padx=(0, 6))
+            tk.Label(row, text=p["name"], fg=P["text"], bg=P["card"], font=(FONT, 10, "bold")).pack(side="left", padx=(0, 8))
+            tk.Label(row, text=line, fg=P["muted"], bg=P["card"]).pack(side="left")
         self.render_auto()
         self.render_hero()
 
@@ -553,15 +794,16 @@ class App:
             soon = sorted([s for s in lst if s.get("status") == "soon"], key=lambda s: (s.get("startAt") or 9e15, s.get("startYmd") or 99999999))
             if opened:
                 s = opened[0]
-                kind, title = "open", "Bewerbung ist offen! 🚀"
-                sub = " & ".join(x["name"] for x in opened) + ("" if s.get("endUnknown") else f" · {s.get('start', '')[:6]} – {s.get('end', '')}")
+                kind, title = "open", "Bewerbung ist offen!"
+                sub = " & ".join(x["name"] for x in opened) + ("" if s.get("endUnknown") else f"  ·  {s.get('start', '')[:6]} – {s.get('end', '')}")
                 if s.get("endAt", 0) > now:
-                    target, lab = s["endAt"], "Endet in"
+                    target, lab = s["endAt"], "ENDET IN"
             elif soon:
                 s = soon[0]
-                kind, title = "soon", "Nächste Runde kommt 📅"
+                kind, title = "soon", "Nächste Runde kommt"
                 if s.get("startAt", 0) > now:
-                    sub, target, lab = f"{s['name']}: Start {engine.fmt_when(s['startAt'])}", s["startAt"], "Startet in"
+                    names = " & ".join(x["name"] for x in soon if x.get("startAt") == s["startAt"])
+                    sub, target, lab = f"{names}  ·  Start {plain(engine.fmt_when(s['startAt']))}", s["startAt"], "STARTET IN"
                 elif s.get("startYmd"):
                     sub = f"{s['name']}: Bewerbung vom {s['start'][:6]} bis {s['end']}"
                 else:
@@ -569,34 +811,42 @@ class App:
             else:
                 title, sub = "Gerade keine Testaktion", "Ich melde mich, sobald es bei MediaMarkt oder Saturn eine neue Runde gibt."
             if all(s.get("error") for s in lst):
-                kind, sub, target = "err", "⚠️ " + lst[0]["error"], 0
+                kind, sub, target = "err", lst[0]["error"], 0
         self.hero_target, self.hero_label = target, lab
         col = HERO[kind]
-        for w in (self.hero, self.h_last, self.h_title, self.h_sub, self.h_cd):
+        tile = mix(col, "#ffffff", 0.2)
+        for w in (self.hero, self.h_last, self.h_title, self.h_sub, self.tiles, self.h_tlabel, self.tile_row):
             w.configure(bg=col)
+        for box, v, u in self.tile_boxes:
+            for w in (box, v, u):
+                w.configure(bg=tile)
         t = last.get("time")
         self.h_last.configure(text=("Geprüft " + datetime.fromtimestamp(t / 1000).strftime("%d.%m. %H:%M")) if t else "Noch nicht geprüft")
         self.h_title.configure(text=title)
         self.h_sub.configure(text=sub)
+        self.h_tlabel.configure(text=lab)
         self.update_countdown()
 
     def update_countdown(self):
-        target = getattr(self, "hero_target", 0)
-        s = int((target - time.time() * 1000) / 1000) if target else 0
+        s = int((self.hero_target - time.time() * 1000) / 1000) if self.hero_target else 0
         if s <= 0:
-            self.h_cd.configure(text="")
+            self.tiles.pack_forget()
             return
-        self.h_cd.configure(text=f"⏳ {self.hero_label}  {s // 86400} Tage  {s % 86400 // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}")
+        if not self.tiles.winfo_manager():
+            self.tiles.pack(anchor="w")
+        for i, (_box, v, _u) in enumerate(self.tile_boxes):
+            val = (s // 86400, s % 86400 // 3600, s % 3600 // 60, s % 60)[i]
+            v.configure(text=str(val) if i == 0 else f"{val:02d}")
 
     def render_auto(self):
         n = self.count(self.build_queue(False))
         multi = len(self.cfg["persons"]) > 1
         a = self.count(self.build_queue(True)) if multi else 0
-        ic = "🧪" if self.var_probe.get() else "🤖"
-        self.btn_auto.configure(text=f"{ic} {'Probelauf' if self.var_probe.get() else 'Automatisch bewerben'}: {n}" + (f" ({self.me()['label']})" if multi else ""))
-        self.btn_auto.configure(state="normal" if n else "disabled")
+        probe = self.var_probe.get()
+        self.btn_auto.configure(text=("Probelauf" if probe else "Automatisch bewerben") + f": {n}" + (f"  ({self.me()['label']})" if multi else ""),
+                                state="normal" if n else "disabled")
         if multi:
-            self.btn_all.configure(text=f"{ic} Alle Personen: {a}", state="normal" if a else "disabled")
+            self.btn_all.configure(text=("Probelauf" if probe else "Auto") + f" – alle Personen: {a}", state="normal" if a else "disabled")
             self.btn_all.pack(side="left", padx=6, after=self.btn_auto)
         else:
             self.btn_all.pack_forget()
@@ -608,11 +858,12 @@ class App:
         names = {p["aid"]: p["name"] for s in self.shops() for p in s.get("products", [])}
         for aid in reversed(ids):
             o = me.get("info", {}).get(aid) or {}
-            res = {"yes": "🎉 Ausgewählt", "no": "Nicht ausgewählt"}.get(o.get("result"), "⏳ Noch offen")
+            res = {"yes": "Ausgewählt", "no": "Nicht ausgewählt"}.get(o.get("result"), "Noch offen")
             due = o.get("due", "")
             due = f"{due[8:10]}.{due[5:7]}.{due[:4]}" if len(due) == 10 else ""
-            self.atree.insert("", "end", iid=aid, values=(o.get("name") or names.get(aid) or f"Produkt {aid}", o.get("shop", ""),
-                                                         o.get("date") or me.get("applied", {}).get(aid, ""), res, due))
+            tag = {"yes": ("win",), "no": ("lost",)}.get(o.get("result"), ())
+            self.atree.insert("", "end", iid=aid, tags=tag, values=(o.get("name") or names.get(aid) or f"Produkt {aid}", o.get("shop", ""),
+                                                                   o.get("date") or me.get("applied", {}).get(aid, ""), res, due))
 
     def render_profile(self):
         me = self.me()
@@ -625,24 +876,24 @@ class App:
             v.set(prof.get(f"k{i}", ""))
             tx.delete("1.0", "end")
             tx.insert("1.0", prof.get(f"t{i}", ""))
-        for k, (e, p, lbl, st) in self.acc.items():
+        for k, (e, pw, lbl, st) in self.acc.items():
             a = me.get("accounts", {}).get(k) or {}
             e.set(a.get("email", ""))
-            p.set("")
+            pw.set("")
             lbl.configure(text="Passwort (gespeichert – leer lassen zum Behalten)" if a.get("pw") else "Passwort")
             st.configure(text="")
         self.var_dc.set("")
-        self.lbl_dc.configure(text="✅ gespeichert" if engine.DISCORD_VALID.match(self.cfg.get("discordUrl", "")) else "")
+        self.lbl_dc.configure(text="✓ gespeichert" if engine.DISCORD_VALID.match(self.cfg.get("discordUrl", "")) else "")
 
     def render_custom(self):
         self.lst_custom.delete(0, "end")
         for p in self.cfg.get("custom", []):
-            self.lst_custom.insert("end", f"{p['name']}  ·  {p['url']}  ·  🔑 {p['keywords']}")
+            self.lst_custom.insert("end", f"  {p['name']}  ·  {p['url']}  ·  Stichwörter: {p['keywords']}")
 
     def render_history(self):
         self.histbox.configure(state="normal")
         self.histbox.delete("1.0", "end")
-        self.histbox.insert("1.0", "\n".join(self.cfg.get("history", [])) or "Noch nichts passiert.")
+        self.histbox.insert("1.0", "\n".join(plain(h) for h in self.cfg.get("history", [])) or "Noch nichts passiert.")
         self.histbox.configure(state="disabled")
 
     # ---------- Start-Seite: Aktionen ----------
@@ -654,7 +905,7 @@ class App:
         return None, None
 
     def tree_click(self, ev):
-        if self.tree.identify_region(ev.x, ev.y) != "cell" or self.tree.identify_column(ev.x) != "#1":
+        if self.tree.identify_column(ev.x) != "#1":
             return
         aid = self.tree.identify_row(ev.y)
         if not aid:
@@ -740,9 +991,9 @@ class App:
             return
         who = "für alle Personen nacheinander" if everyone else (f"als {self.me()['label']}" if len(self.cfg["persons"]) > 1 else "")
         if self.var_probe.get():
-            q = f"🧪 Probelauf für {n} Produkt(e) {who}?\n\nDie App meldet an und füllt alles aus, schickt aber NICHTS ab. Am Ende siehst du einen Bericht."
+            q = f"Probelauf für {n} Produkt(e) {who}?\n\nDas Programm meldet an und füllt alles aus, schickt aber NICHTS ab. Am Ende siehst du einen Bericht."
         else:
-            q = (f"{n} Bewerbung(en) automatisch abschicken {who}?\n\nDie App meldet an, füllt das Formular mit den gespeicherten Daten aus, "
+            q = (f"{n} Bewerbung(en) automatisch abschicken {who}?\n\nDas Programm meldet an, füllt das Formular mit den gespeicherten Daten aus, "
                  "akzeptiert die Teilnahmebedingungen und den Datenschutzhinweis im Namen der jeweiligen Person und schickt ab.")
         if not messagebox.askyesno(APP_NAME, q):
             return
@@ -750,7 +1001,7 @@ class App:
         self.worker.submit("queue", items)
 
     def set_progress(self, n, total, label):
-        self.lbl_progress.configure(text=f"{min(n + 1, total)}/{total}  {label}" if n < total else "✅ Fertig")
+        self.lbl_progress.configure(text=f"{min(n + 1, total)}/{total}   {plain(label)}" if n < total else "✓ Fertig")
 
     # ---------- Bewerbungen ----------
     def app_selected(self):
@@ -758,7 +1009,7 @@ class App:
         if not sel:
             return
         o = self.me().get("info", {}).get(sel[0]) or {}
-        self.var_result.set({"yes": "🎉 Ausgewählt", "no": "Nicht ausgewählt"}.get(o.get("result"), "⏳ Noch offen"))
+        self.var_result.set({"yes": "Ausgewählt", "no": "Nicht ausgewählt"}.get(o.get("result"), "Noch offen"))
         due = o.get("due", "")
         self.var_due.set(f"{due[8:10]}.{due[5:7]}.{due[:4]}" if len(due) == 10 else "")
 
@@ -766,7 +1017,7 @@ class App:
         sel = self.atree.selection()
         if not sel:
             return
-        res = {"🎉 Ausgewählt": "yes", "Nicht ausgewählt": "no"}.get(self.var_result.get(), "")
+        res = {"Ausgewählt": "yes", "Nicht ausgewählt": "no"}.get(self.var_result.get(), "")
         due = ""
         d = self.var_due.get().strip()
         if res == "yes" and d:
@@ -793,12 +1044,10 @@ class App:
             self.render_home()
 
     # ---------- Personen ----------
-    def select_person(self):
-        label = self.var_person.get()
-        for p in self.cfg["persons"]:
-            if p["label"] == label:
-                self.set_cfg("active", p["id"])
-        self.render_all()
+    def select_person(self, pid):
+        if pid != self.cfg["active"]:
+            self.set_cfg("active", pid)
+            self.render_all()
 
     def add_person(self):
         if len(self.cfg["persons"]) >= 6:
@@ -846,45 +1095,41 @@ class App:
         with self.cfg_lock:
             self.me()["profile"] = prof
             save_config(self.cfg)
-        messagebox.showinfo(APP_NAME, "✅ Daten gespeichert.")
+        messagebox.showinfo(APP_NAME, "Daten gespeichert.")
 
     def save_account(self, key):
-        e, p, lbl, st = self.acc[key]
+        e, pw, lbl, st = self.acc[key]
         with self.cfg_lock:
             a = self.me().setdefault("accounts", {}).setdefault(key, {})
             a["email"] = e.get().strip()
-            if p.get():
-                enc = encrypt_pw(p.get())
+            if pw.get():
+                enc = encrypt_pw(pw.get())
                 if not enc:
                     messagebox.showwarning(APP_NAME, "Passwort konnte nicht verschlüsselt werden.")
                     return
                 a["pw"] = enc
-            if not a["email"] and not p.get():
+            if not a["email"] and not pw.get():
                 self.me()["accounts"].pop(key, None)
             save_config(self.cfg)
         self.worker.submit("reset", self.cfg["active"])  # Browser der Person mit neuen Zugangsdaten neu starten
         self.render_profile()
-        st.configure(text="✅ gespeichert")
+        st.configure(text="✓ gespeichert", foreground=GREEN)
 
     def open_browser(self, url):
         self.worker.submit("open", self.cfg["active"], url, None)
 
     def check_login(self):
         for _e, _p, _l, st in self.acc.values():
-            st.configure(text="⏳ prüfe …")
+            st.configure(text="prüfe …", foreground=P["muted"])
         self.busy(True)
         self.worker.submit("loginstate", self.cfg["active"])
 
     def show_loginstate(self, res):
         for k, v in res.items():
-            self.acc[k][3].configure(text={1: "✅ angemeldet", 0: "❌ nicht angemeldet"}.get(v, "❔ unklar"))
+            self.acc[k][3].configure(text={1: "✓ angemeldet", 0: "✗ nicht angemeldet"}.get(v, "? unklar"),
+                                     foreground={1: GREEN, 0: "#d33"}.get(v, P["muted"]))
 
     # ---------- Einstellungen ----------
-    def set_cfg(self, key, val):
-        with self.cfg_lock:
-            self.cfg[key] = val
-            save_config(self.cfg)
-
     def save_discord(self):
         url = self.var_dc.get().strip()
         if url and not engine.DISCORD_VALID.match(url):
@@ -902,12 +1147,12 @@ class App:
         if not engine.DISCORD_VALID.match(url):
             messagebox.showinfo(APP_NAME, "Erst eine Webhook-Adresse speichern.")
             return
-        self.lbl_dc.configure(text="⏳ sende …")
+        self.lbl_dc.configure(text="sende …")
 
         def go():
             code = engine.discord_send(url, "🦊 Fox Testpilot (Windows) ist verbunden", "Ab jetzt kommen die Meldungen auch vom PC hier an.",
                                        engine.SHOPS[0]["url"], self.cfg.get("discordPing", False))
-            self.post(lambda: self.lbl_dc.configure(text="✅ gesendet – angekommen?" if 200 <= code < 300 else f"❌ Fehler {code}"))
+            self.post(lambda: self.lbl_dc.configure(text="✓ gesendet – angekommen?" if 200 <= code < 300 else f"✗ Fehler {code}"))
 
         threading.Thread(target=go, daemon=True).start()
 
@@ -925,9 +1170,8 @@ class App:
         with self.cfg_lock:
             self.cfg.setdefault("custom", []).append({"id": f"c{int(time.time() * 1000)}", "name": name or url.split("/")[2], "url": url, "keywords": kw})
             save_config(self.cfg)
-        self.var_cn.set("")
-        self.var_cu.set("")
-        self.var_ck.set("")
+        for v in (self.var_cn, self.var_cu, self.var_ck):
+            v.set("")
         self.render_custom()
         self.check(True)
 
@@ -941,13 +1185,21 @@ class App:
         self.render_custom()
         self.render_home()
 
+    def dialog(self, title, w=640, h=440):
+        win = tk.Toplevel(self.root, bg=P["bg"])
+        win.title(title)
+        win.geometry(f"{w}x{h}")
+        try:
+            win.iconbitmap(ICON)
+        except Exception:  # noqa: BLE001
+            pass
+        return win
+
     def import_backup(self):
-        win = tk.Toplevel(self.root)
-        win.title("Sicherung einspielen")
-        win.geometry("620x420")
-        ttk.Label(win, text="Sicherung aus der Android-App hier einfügen (Strg+V):").pack(anchor="w", padx=12, pady=(12, 4))
-        tx = tk.Text(win, wrap="word", font=("Consolas", 9))
-        tx.pack(fill="both", expand=True, padx=12)
+        win = self.dialog("Sicherung einspielen")
+        ttk.Label(win, text="Sicherung aus der Android-App hier einfügen (Strg+V):").pack(anchor="w", padx=14, pady=(14, 6))
+        tx = self.text_widget(win, 10, mono=True)
+        tx.pack(fill="both", expand=True, padx=14)
 
         def go():
             if not messagebox.askyesno(APP_NAME, "Sicherung einspielen? Die jetzigen Personen und Häkchen werden ersetzt.", parent=win):
@@ -960,15 +1212,16 @@ class App:
                 messagebox.showerror(APP_NAME, f"Import fehlgeschlagen: {e}", parent=win)
                 return
             win.destroy()
+            self.imgs = {k: v for k, v in self.imgs.items() if not k.startswith("av")}
             self.render_all()
-            messagebox.showinfo(APP_NAME, f"✅ {n} Person(en) übernommen. Bitte unter „Personen“ die Passwörter neu eintragen.")
+            messagebox.showinfo(APP_NAME, f"{n} Person(en) übernommen. Bitte unter „Personen“ die Passwörter neu eintragen.")
 
-        ttk.Button(win, text="Einspielen", style="Accent.TButton", command=go).pack(pady=10)
+        ttk.Button(win, text="Einspielen", style="Accent.TButton", command=go).pack(pady=12)
 
     def export_backup(self):
         self.root.clipboard_clear()
         self.root.clipboard_append(engine.export_backup(self.cfg))
-        messagebox.showinfo(APP_NAME, "📋 Sicherung (ohne Passwörter) in die Zwischenablage kopiert.")
+        messagebox.showinfo(APP_NAME, "Sicherung (ohne Passwörter) in die Zwischenablage kopiert.")
 
     def diagnose(self):
         self.busy(True)
@@ -976,18 +1229,16 @@ class App:
         self.worker.submit("diagnose")
 
     def show_text(self, title, text):
-        win = tk.Toplevel(self.root)
-        win.title(title)
-        win.geometry("760x620")
-        tx = tk.Text(win, wrap="word", font=("Consolas", 9))
+        win = self.dialog(title, 780, 640)
+        tx = self.text_widget(win, 20, mono=True)
         tx.insert("1.0", text)
-        tx.pack(fill="both", expand=True, padx=10, pady=10)
+        tx.pack(fill="both", expand=True, padx=12, pady=12)
 
         def copy_text():
             self.root.clipboard_clear()
             self.root.clipboard_append(text)
 
-        ttk.Button(win, text="📋 Kopieren", style="Accent.TButton", command=copy_text).pack(pady=(0, 10))
+        ttk.Button(win, text="Kopieren", style="Accent.TButton", command=copy_text).pack(pady=(0, 12))
 
     # ---------- Prüfen und Zeitplan ----------
     def check(self, manual=False):
@@ -1033,7 +1284,6 @@ class App:
     def start_tray(self):
         try:
             import pystray
-            from PIL import Image
             menu = pystray.Menu(
                 pystray.MenuItem("Fox Testpilot öffnen", lambda *_: self.post(self.show_window), default=True),
                 pystray.MenuItem("Jetzt prüfen", lambda *_: self.post(self.check, True)),
@@ -1085,7 +1335,7 @@ class App:
                     best = (n, asset["browser_download_url"])
             if best:
                 self.update_url = best[1]
-                self.post(lambda: (self.upd.configure(text=f"⬆️ Version 1.{best[0]} installieren"), self.upd.pack(side="right", padx=6)))
+                self.post(lambda: (self.upd.configure(text=f"Version 1.{best[0]} installieren"), self.upd.pack(side="right", padx=8)))
                 self.log(f"Neue Version 1.{best[0]} verfügbar")
         except Exception as e:  # noqa: BLE001
             self.log(f"Update-Prüfung: {e}")
@@ -1096,7 +1346,7 @@ class App:
         if not getattr(sys, "frozen", False):
             webbrowser.open(self.update_url)
             return
-        self.upd.configure(text="⏳ Lade Update …")
+        self.upd.configure(text="Lade Update …")
 
         def go():
             try:
