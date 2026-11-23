@@ -36,6 +36,8 @@ public class ApplyActivity extends Activity {
 
     private WebView web;
     private boolean allFrames = false;
+    // Konto anlegen: Registrierungsformular mit den Daten der Person füllen (nie automatisch absenden)
+    private boolean register = false;
     private String script = "";
     // Auto-Modus: ausgewählte Produkte nacheinander ausfüllen und absenden
     private org.json.JSONArray queue;
@@ -262,6 +264,23 @@ public class ApplyActivity extends Activity {
     }
 
     static String buildScript(android.content.Context c, String product, String url, String autoAid, boolean probe) {
+        return buildScript(c, product, url, autoAid, probe, false);
+    }
+
+    /** Erlaubte Seiten für das Registrier-Skript mit Passwort: nur MediaMarkt/Saturn (gemeinsames Konto). */
+    static final String[] REG_HOSTS = { "mediamarkt.de", "saturn.de", "mediamarktsaturn.com" };
+
+    static boolean regHost(String url) {
+        try {
+            String host = android.net.Uri.parse(url).getHost();
+            if (host == null) return false;
+            for (String h : REG_HOSTS) if (host.equals(h) || host.endsWith("." + h)) return true;
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
+    static String buildScript(android.content.Context c, String product, String url, String autoAid, boolean probe, boolean reg) {
         try {
             JSONObject p = new JSONObject(PilotChecker.prefs(c).getString(PilotChecker.profileKey(c), "{}"));
             String name = product == null || product.trim().isEmpty() ? "das Testprodukt" : product.trim();
@@ -286,6 +305,17 @@ public class ApplyActivity extends Activity {
             String shop = url == null ? null : Accounts.shopForUrl(url);
             String mail = shop == null ? "" : Accounts.email(c, shop);
             if (!mail.isEmpty()) p.put("email", mail);
+            if (reg) {
+                p.put("reg", true);
+                // MediaMarkt und Saturn haben ein gemeinsames Konto: E-Mail/Passwort von dem Shop nehmen, wo etwas gespeichert ist
+                if (regHost(url)) {
+                    for (String[] sh : Accounts.SHOPS) {
+                        String pw = Accounts.password(c, sh[0]), em = Accounts.email(c, sh[0]);
+                        if (!pw.isEmpty() && !p.has("pw")) p.put("pw", pw);
+                        if (!em.isEmpty() && mail.isEmpty()) { p.put("email", em); mail = em; }
+                    }
+                }
+            }
             if (autoAid != null) {
                 p.put("auto", true);
                 p.put("aid", autoAid);
@@ -421,20 +451,28 @@ public class ApplyActivity extends Activity {
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
 
-        if (queue == null) script = buildScript(this, getIntent().getStringExtra("name"), getIntent().getStringExtra("url"), null);
+        register = queue == null && getIntent().getBooleanExtra("register", false);
+        if (register) title.setText("🆕 Konto anlegen");
+        if (queue == null) script = buildScript(this, getIntent().getStringExtra("name"), getIntent().getStringExtra("url"), null, false, register);
         // Skript in ALLE Rahmen der Seite laden – das Formular ist oft von einem anderen Anbieter eingebettet
         try {
             if (queue == null && !script.isEmpty() && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                WebViewCompat.addDocumentStartJavaScript(web, script, Collections.singleton("*"));
+                java.util.Set<String> origins = new java.util.HashSet<>();
+                if (register && script.contains("\"pw\":")) {
+                    // Das Passwort nur in die Seiten von MediaMarkt/Saturn geben, nie in fremde Rahmen
+                    for (String h : REG_HOSTS) { origins.add("https://" + h); origins.add("https://*." + h); }
+                } else origins.add("*");
+                WebViewCompat.addDocumentStartJavaScript(web, script, origins);
                 allFrames = true;
             }
         } catch (Exception ignored) {
         }
-        addLoginScripts();
+        if (!register) addLoginScripts();
+        else loginViaStart = true;   // beim Registrieren NICHT automatisch anmelden
         web.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String u) {
-                if (!allFrames && !script.isEmpty()) view.evaluateJavascript(script, null);
+                if (!allFrames && !script.isEmpty() && (!register || regHost(u) || !script.contains("\"pw\":"))) view.evaluateJavascript(script, null);
                 if (!loginViaStart) {
                     String shop = Accounts.shopForUrl(u);
                     String js = shop == null ? "" : Accounts.loginScript(ApplyActivity.this, shop);
@@ -476,7 +514,8 @@ public class ApplyActivity extends Activity {
             Toast.makeText(this, "Bitte zuerst deine Daten in den Einstellungen speichern", Toast.LENGTH_LONG).show();
             return;
         }
-        web.evaluateJavascript((allFrames ? "" : script + ";") + "(window.__foxFill?window.__foxFill():0)", v -> {
+        boolean inject = !allFrames && (!register || regHost(web.getUrl()) || !script.contains("\"pw\":"));
+        web.evaluateJavascript((inject ? script + ";" : "") + "(window.__foxFill?window.__foxFill():0)", v -> {
             if (toast && ("0".equals(v) || "null".equals(v))) {
                 Toast.makeText(this, "Falls nichts ausgefüllt wurde: erst zum Teilnahmeformular scrollen, dort ggf. Cookies zulassen und nochmal tippen", Toast.LENGTH_LONG).show();
             }

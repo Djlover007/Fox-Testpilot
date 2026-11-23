@@ -7,7 +7,7 @@
   var D = window.__foxData || {};
   var count = 0, foundForm = false, sending = false, tries = 0, filled = [];
   var FL = { email: "E-Mail", first: "Vorname", last: "Nachname", name: "Name", streetfull: "Straße + Nr.", street: "Straße", nr: "Hausnummer",
-    zip: "PLZ", city: "Ort", phone: "Telefon", birth: "Geburtsdatum", text: "Bewerbungstext" };
+    zip: "PLZ", city: "Ort", phone: "Telefon", birth: "Geburtsdatum", text: "Bewerbungstext", pw: "Passwort" };
   var TOP = window.top === window;
 
   // Auto-Modus: Stand an die oberste Seite melden (das Formular kann in einem eingebetteten Rahmen stecken)
@@ -173,7 +173,7 @@
     });
     groups.forEach(function (g) {
       // Nur echte Formulare: mit Textfeld für die Bewerbung oder mindestens 2 erkannten Feldern
-      if (!g.area && g.items.length < 2) return;
+      if (!g.area && g.items.length < (D.reg ? 1 : 2)) return;
       var hasNr = g.items.some(function (x) { return x.f === "nr"; });
       g.items.forEach(function (x) {
         if (x.e.value) return;
@@ -183,7 +183,8 @@
       foundForm = true;
       autoSend(g, roots[groups.indexOf(g)]);
     });
-    if (!groups.some(function (g) { return g.area || g.items.length >= 2; })) return show();
+    if (D.reg) fillPasswords();
+    if (!groups.some(function (g) { return g.area || g.items.length >= (D.reg ? 1 : 2); })) return show();
 
     // Auswahlfelder: Anrede und Land
     [].slice.call(document.querySelectorAll("select")).forEach(function (s) {
@@ -217,6 +218,16 @@
     show();
   }
 
+  /** Konto anlegen: gespeichertes Passwort in „Passwort“ und „Passwort wiederholen“ eintragen. */
+  function fillPasswords() {
+    if (!D.pw) return;
+    [].slice.call(document.querySelectorAll("input[type=password]")).forEach(function (e) {
+      if (e.value || !visible(e) || /aktuell|current|\bold\b|\balt(es)?\b/.test(keyOf(e))) return;
+      setVal(e, D.pw, "pw");
+      filled[filled.length - 1][1] = "••••••";
+    });
+  }
+
   function show() {
     if (!count || !document.body) return;
     var b = document.getElementById("__foxBanner");
@@ -227,7 +238,7 @@
       b.onclick = function () { b.remove(); };
       document.body.appendChild(b);
     }
-    b.textContent = D.auto ? "🤖 " + count + " Felder ausgefüllt – wird automatisch abgeschickt" : "🦊 " + count + " Felder ausgefüllt – bitte prüfen, Häkchen setzen und selbst absenden";
+    b.textContent = D.reg ? "🦊 " + count + " Felder ausgefüllt – bitte prüfen, Häkchen und Bestätigungs-Code selbst eingeben und selbst absenden" : D.auto ? "🤖 " + count + " Felder ausgefüllt – wird automatisch abgeschickt" : "🦊 " + count + " Felder ausgefüllt – bitte prüfen, Häkchen setzen und selbst absenden";
   }
 
   function relay() {
@@ -264,7 +275,7 @@
 
   var runs = 0;
   var timer = setInterval(function () {
-    if (++runs > 60) return clearInterval(timer);
+    if (++runs > (D.reg ? 400 : 60)) return clearInterval(timer);
     try { fill(); } catch (x) {}
     // Auto-Modus: nach unten blättern, damit das Formular geladen wird; notfalls einmal den Teilnahme-Knopf antippen
     if (D.auto && TOP && !foundForm && !window.__foxState) {

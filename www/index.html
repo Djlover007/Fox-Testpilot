@@ -250,6 +250,15 @@ details.card .hist{padding:0 0 8px;margin:0;background:none}
         <div class="two"><button class="btn asave">Speichern</button><button class="btn light alogin">Anmelden</button></div>
       </div>
     </div>
+    <div class="form">
+      <h3>🆕 Konto anlegen</h3>
+      <p>Noch kein Konto für <b id="regfor"></b>? Ein Konto gilt für MediaMarkt <b>und</b> Saturn. So geht's:</p>
+      <p>1. Oben bei myMediaMarkt E-Mail und ein <b>neues Passwort</b> eintragen und speichern.<br>2. Auf „Konto anlegen“ tippen und auf der Seite „Neu registrieren“ wählen.<br>3. Die App trägt Name, Adresse, Geburtsdatum, E-Mail und Passwort ein. Häkchen, Bestätigungs-Code aus der E-Mail und Absenden machst du selbst.</p>
+      <button class="btn" id="regmm">🆕 Konto anlegen</button>
+      <p style="margin-top:14px"><b>📝 Andere Seite</b> – Anmelde- oder Registrierformular einer anderen Seite mit den Daten dieser Person ausfüllen (ohne Passwort).</p>
+      <input id="reg_url" type="url" placeholder="https://…" autocomplete="off">
+      <button class="btn light" id="regother">📝 Öffnen und ausfüllen</button>
+    </div>
   </section>
 
   <!-- Einstellungen -->
@@ -498,6 +507,7 @@ function renderPeople() {
     box.innerHTML = html;
   });
   $("pfor").textContent = activeLabel();
+  $("regfor").textContent = activeLabel();
   $("p_label").value = activeLabel();
   $("pdel").hidden = state.persons.length < 2;
 }
@@ -739,6 +749,19 @@ document.querySelectorAll("[data-acc]").forEach(function (box) {
   };
   box.querySelector(".alogin").onclick = function () { openLink(box.dataset.url); };
 });
+function openRegister(url) { call("openApply", { url: url, name: "", register: true }).catch(function (e) { alertErr(e.message); }); }
+$("regmm").onclick = function () {
+  call("getAccounts", {}, 15000).then(function (a) {
+    var ok = ["mm", "saturn"].some(function (k) { return a && a[k] && a[k].email && a[k].hasPassword; });
+    if (!ok) return alertErr("Bitte zuerst oben bei myMediaMarkt E-Mail und neues Passwort eintragen und speichern.");
+    openRegister("https://www.mediamarkt.de/de/myaccount");
+  }).catch(function (e) { alertErr(e.message); });
+};
+$("regother").onclick = function () {
+  var u = $("reg_url").value.trim();
+  if (!/^https?:\/\/[^\s.]+\.[^\s]+/i.test(u)) { if (/^[^\s]+\.[^\s]+$/.test(u)) u = "https://" + u; else return alertErr("Bitte eine Web-Adresse eingeben, z. B. https://www.beispiel.de/registrieren"); }
+  openRegister(u);
+};
 
 $("check").onclick = check;
 $("openpage").onclick = function () { openLink(heroUrl); };

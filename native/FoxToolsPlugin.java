@@ -276,6 +276,7 @@ public class FoxToolsPlugin extends Plugin {
         Intent i = new Intent(getContext(), ApplyActivity.class);
         i.putExtra("url", call.getString("url", PilotChecker.PAGE));
         i.putExtra("name", call.getString("name", ""));
+        i.putExtra("register", Boolean.TRUE.equals(call.getBoolean("register", false)));
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         getContext().startActivity(i);
         call.resolve();

@@ -14,6 +14,8 @@ In der App siehst du alle Testprodukte und hakst ab, wofür du dich schon beworb
 - Prüft im Hintergrund alle 15 Min. bis 3 Std. (einstellbar, Android WorkManager)
 - Tipp: In den Android-Einstellungen für Fox Testpilot „Akku: Nicht eingeschränkt“ wählen
 
+**Konto anlegen:** Unter 👥 Personen → „🆕 Konto anlegen“ öffnet die Registrierung von MediaMarkt (gilt auch für Saturn) und trägt Name, Adresse, Geburtsdatum, E-Mail und das gespeicherte Passwort ein (das Passwort nur auf mediamarkt.de/saturn.de). Unter „📝 Andere Seite“ lässt sich jedes Anmelde- oder Registrierformular mit den Daten der Person füllen (ohne Passwort). Häkchen, Bestätigungs-Code und Absenden machst du immer selbst.
+
 **Mehrere Personen im Haushalt:** Mit ＋ bekommt jede Person ein eigenes Profil (eigene Daten, eigene Konten, eigene „Beworben“-Liste). Beim Wechsel wird der App-Browser abgemeldet.
 
 **Weitere Funktionen:** Auto-Modus (ausgewählte Produkte nacheinander ausfüllen und absenden, auch für alle Personen), eigene Bewerbungstexte je Stichwort, „Meine Bewerbungen“ mit Ergebnis und Erinnerung an die Bewertungs-Frist, Erinnerung 10 Minuten vor dem Start, Kalendereintrag, Nachtruhe, Startbildschirm-Widget, Sicherung als Text (ohne Passwörter) und eine Diagnose („Seiten testen“ / langes Drücken auf „Ausfüllen“ im App-Browser).
